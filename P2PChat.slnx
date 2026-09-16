@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/P2PChat.App/P2PChat.App.csproj" />
+    <Project Path="src/P2PChat.Chat/P2PChat.Chat.csproj" />
+    <Project Path="src/P2PChat.Core/P2PChat.Core.csproj" />
+    <Project Path="src/P2PChat.Crypto/P2PChat.Crypto.csproj" />
+    <Project Path="src/P2PChat.FileTransfer/P2PChat.FileTransfer.csproj" />
+    <Project Path="src/P2PChat.Networking/P2PChat.Networking.csproj" />
+    <Project Path="src/P2PChat.UI/P2PChat.UI.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/P2PChat.Chat.Tests/P2PChat.Chat.Tests.csproj" />
+    <Project Path="tests/P2PChat.Core.Tests/P2PChat.Core.Tests.csproj" />
+    <Project Path="tests/P2PChat.Crypto.Tests/P2PChat.Crypto.Tests.csproj" />
+    <Project Path="tests/P2PChat.Networking.Tests/P2PChat.Networking.Tests.csproj" />
+    <Project Path="tests/P2PChat.Integration.Tests/P2PChat.Integration.Tests.csproj" />
+  </Folder>
+</Solution>

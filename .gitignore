@@ -1,0 +1,44 @@
+# ---- 构建产物 ----
+[Bb]in/
+[Oo]bj/
+[Pp]ublish/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.pdb
+*.ilk
+*.meta
+
+# ---- IDE / 工具 ----
+.vs/
+.idea/
+.vscode/
+*.swp
+*~
+
+# ---- 运行时数据（务必不要入库）----
+# 身份密钥、会话密钥、群密钥、已知节点、日志均由程序在运行目录的 data/ 下生成
+data/
+identity.json
+session_keys.json
+group_keys.json
+peers.txt
+logs/
+
+# ---- 本地工具配置 ----
+.claude/
+.codex-*
+.aot-*.log
+*.tmp
+
+# ---- 内部文档（仅本地保留，不进入公开仓库）----
+tests/P2PChat.Integration.Tests/DEFECTS.md
+
+# ---- NuGet ----
+*.nupkg
+*.snupkg
+.nuget/
+packages/
