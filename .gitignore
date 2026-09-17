@@ -20,8 +20,12 @@
 *~
 
 # ---- 运行时数据（务必不要入库）----
-# 身份密钥、会话密钥、群密钥、已知节点、日志均由程序在运行目录的 data/ 下生成
+# 身份密钥、会话密钥、群密钥、联系人、已知节点、日志均由程序在
+# 用户主目录下的 .p2pc/ 中生成（可用 P2PCHAT_DATA_DIR 覆盖）。
+# 以下条目用于防止把该目录或其中的文件误放进仓库。
+.p2pc/
 data/
+contacts.json
 identity.json
 session_keys.json
 group_keys.json

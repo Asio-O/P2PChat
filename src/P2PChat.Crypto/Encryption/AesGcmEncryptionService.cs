@@ -6,8 +6,13 @@ namespace P2PChat.Crypto.Encryption;
 
 /// <summary>
 /// AES-256-GCM 加密服务实现
-/// ECDH(X25519)密钥协商 + HKDF-SHA256密钥派生 + AES-256-GCM加解密
+/// ECDH(nistP256)密钥协商 + HKDF-SHA256密钥派生 + AES-256-GCM加解密 + ECDSA(P-256/SHA-256)签名
 /// </summary>
+/// <remarks>
+/// 密钥编码格式：公钥为 SubjectPublicKeyInfo (DER)，私钥为 ECPrivateKey (DER)，
+/// 由 <see cref="System.Security.Cryptography.ECDiffieHellman.ExportSubjectPublicKeyInfo"/>
+/// / <c>ExportECPrivateKey</c> 产生，并与对应的 Import 方法配套。
+/// </remarks>
 public class AesGcmEncryptionService : IEncryptionService
 {
     private readonly ILogger<AesGcmEncryptionService> _logger;

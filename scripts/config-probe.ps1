@@ -12,6 +12,8 @@
     * 严禁复制 exe —— 所有场景共用同一个固定 exe 路径，避免 Windows 防火墙对每个新程序路径
       重复弹出安全警报。
     * 数据隔离使用 P2PCHAT_DATA_DIR（见 src/P2PChat.Core/Extensions/DataPath.cs）。
+      程序默认数据目录是用户主目录下的 .p2pc/；本脚本用 P2PCHAT_DATA_DIR 把每个场景
+      指向独立的临时目录，以避免污染真实用户数据。
     * 默认启用 P2PCHAT_SELFTEST=1，实例打印自检信息后自行退出，不留挂死进程。
 
   注意：本脚本产出"环境变量/命令行注入方式"的结论。2026-09-16 首轮实测（当时仍在复制 exe）
@@ -282,14 +284,13 @@ $checks = @(
         Check    = 'E4 配置键 P2PChat:DataPath 不可注入（仍用 P2PCHAT_DATA_DIR 指定的目录）'
         Pass     = ($e4.StoreDir -ne '<未出现>' -and $e4.StoreDir -like "$($e4.DataDir)*")
         Evidence = "StoreDir=$($e4.StoreDir) 期望以 DATA_DIR=$($e4.DataDir) 开头"
-    },
-    [pscustomobject]@{
+    },    [pscustomobject]@{
         Check    = 'E5 命令行优先于环境变量（首选绑定端口=命令行值 18041）'
         Pass     = ($e5.AttemptedUdp -eq '18041')
         Evidence = "尝试绑定 UDP=$($e5.AttemptedUdp) 实际 UDP=$($e5.UdpActual) env=18031 cmdline=18041"
     },
     [pscustomobject]@{
-        Check    = 'E6 P2PCHAT_DATA_DIR 生效（密钥存储目录 = 指定目录）'
+        Check    = 'E6 P2PCHAT_DATA_DIR 生效（密钥存储目录 = 指定目录，而非默认 .p2pc）'
         Pass     = ($e6.StoreDir -ne '<未出现>' -and $e6.StoreDir -like "$($e6.DataDir)*")
         Evidence = "StoreDir=$($e6.StoreDir) 期望以 $($e6.DataDir) 开头"
     },

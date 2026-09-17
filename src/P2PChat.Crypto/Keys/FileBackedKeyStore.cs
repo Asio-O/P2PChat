@@ -33,7 +33,7 @@ public class FileBackedKeyStore : IKeyStore
         _logger = logger;
         _storeDirectory = Core.Extensions.DataPath.Root;
         Directory.CreateDirectory(_storeDirectory);
-        _logger.LogDebug("密钥存储目录: {Dir}", _storeDirectory);
+        _logger.LogInformation("密钥存储目录: {Dir}", _storeDirectory);
 
         LoadAll();
     }

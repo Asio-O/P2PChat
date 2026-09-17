@@ -57,8 +57,8 @@ pwsh -NoProfile -File scripts/e2e-verify.ps1
 
 额外环境变量：
 
-- `P2PCHAT_DATA_DIR` —— 覆盖数据目录（默认 `<程序目录>/data`）。多实例共存时用它隔离身份与密钥。
-- `P2PCHAT_SELFTEST=1` —— 非交互自检模式：打印节点 ID、监听端口、DHT 已知节点数后自动退出，便于无人值守验证。
+- `P2PCHAT_DATA_DIR` —— **可选**，覆盖数据目录。默认数据目录为 `%USERPROFILE%\.p2pc`（Unix 为 `$HOME/.p2pc`）；仅在同一台机器上同时运行多个需要各自独立身份的实例时才需要设置。
+- `P2PCHAT_SELFTEST=1` —— 非交互自检模式：打印节点 ID、数据目录、监听端口、DHT 已知节点数后自动退出，便于无人值守验证。
 - `P2PCHAT_SELFTEST_WAIT` —— 自检模式等待 DHT 引导的毫秒数。
 
 示例（同机启动两个互不干扰的实例）：
@@ -67,6 +67,24 @@ pwsh -NoProfile -File scripts/e2e-verify.ps1
 $env:P2PCHAT_DATA_DIR="$env:TEMP\nodeA"; $env:P2PCHAT_P2PChat__UdpPort="20081"; $env:P2PCHAT_P2PChat__TcpPort="20091"
 .\P2PChat.App.exe
 ```
+
+### 数据目录
+
+程序的所有运行时文件集中存放在用户主目录下的 **`.p2pc`** 文件夹中，与程序安装位置解耦：
+
+| 文件 | 内容 |
+|---|---|
+| `identity.json` | 长期身份密钥对（ECDH P-256） |
+| `session_keys.json` | 各对端会话密钥 |
+| `group_keys.json` | 各群组密钥 |
+| `contacts.json` | 联系人列表 |
+| `peers.txt` | 已知节点（启动加载、退出保存） |
+| `logs/p2pchat-YYYYMMDD.log` | 按日滚动的运行日志 |
+
+默认路径为 `%USERPROFILE%\.p2pc`（Windows）或 `$HOME/.p2pc`（Unix）。
+
+> 这样设计的原因是：程序可能位于只读目录，重新发布覆盖 exe 也不应连带丢失身份密钥与聊天数据；
+> 同时同一用户的多份程序副本天然共享同一身份。
 
 ## 项目结构
 

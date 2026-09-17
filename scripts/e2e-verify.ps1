@@ -9,8 +9,10 @@
   隔离方式（重要）：
     * 严禁复制 exe。所有节点一律共用同一个固定 exe 路径 —— 复制 exe 会让 Windows 防火墙
       对每个新程序路径重复弹出安全警报（已由 Lead 定位为用户投诉的根因）。
-    * 数据隔离使用环境变量 P2PCHAT_DATA_DIR（见 src/P2PChat.Core/Extensions/DataPath.cs），
-      两个节点各指向独立目录。
+    * 数据隔离使用环境变量 P2PCHAT_DATA_DIR（见 src/P2PChat.Core/Extensions/DataPath.cs）。
+      程序默认把运行时数据放在用户主目录的 .p2pc/ 下；同一台机器上跑多个实例时必须用
+      P2PCHAT_DATA_DIR 为每个实例指定独立目录，否则两个节点会共用同一份 identity.json
+      而导致节点ID 相同、无法作为对等体互相发现。
     * 端口隔离使用 P2PCHAT_P2PChat__UdpPort / P2PCHAT_P2PChat__TcpPort（已实测生效）。
     * 默认启用自检模式 P2PCHAT_SELFTEST=1（见 src/P2PChat.UI/Views/P2PChatTui.cs:42），
       实例打印状态后自行退出，避免遗留阻塞的 TUI 进程；
@@ -381,7 +383,7 @@ try {
     $isoOk = ($storeA -and $storeB -and
               $storeA -like "$dataDirA*" -and $storeB -like "$dataDirB*" -and
               $storeA -ne $storeB)
-    Add-Result 'A24' 'P2PCHAT_DATA_DIR 生效且两节点数据目录独立' $(if ($isoOk) { 'PASS' } else { 'FAIL' }) "A=$storeA | B=$storeB 期望分别位于 $dataDirA / $dataDirB"
+    Add-Result 'A24' 'P2PCHAT_DATA_DIR 生效且两节点数据目录独立（未被 .p2pc 默认目录取代）' $(if ($isoOk) { 'PASS' } else { 'FAIL' }) "A=$storeA | B=$storeB 期望分别位于 $dataDirA / $dataDirB"
     $identityA = Join-Path $dataDirA 'identity.json'
     $identityB = Join-Path $dataDirB 'identity.json'
     $identityOk = (Test-Path -LiteralPath $identityA) -and (Test-Path -LiteralPath $identityB)

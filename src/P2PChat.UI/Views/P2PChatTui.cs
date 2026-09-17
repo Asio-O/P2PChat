@@ -79,6 +79,7 @@ public sealed class P2PChatTui(
         var local = dhtService.LocalNode;
         Console.WriteLine("===== P2PChat 自检 =====");
         Console.WriteLine($"节点ID:     {local.NodeId.ToHexString()}");
+        Console.WriteLine($"数据目录:   {Core.Extensions.DataPath.Root}");
         Console.WriteLine($"监听端口:   {local.EndPoint}");
         Console.WriteLine($"DHT已知节点: {dhtService.GetAllKnownNodes().Count}");
         Console.WriteLine($"联系人:     {contacts}");

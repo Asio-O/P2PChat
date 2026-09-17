@@ -52,7 +52,7 @@ public class Program
             .WriteTo.Console(outputTemplate:
                 "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
             .WriteTo.File(Path.Combine(
-                Core.Extensions.DataPath.Root, "logs", "p2pchat-.log"),
+                Core.Extensions.DataPath.GetDirectory("logs"), "p2pchat-.log"),
                 rollingInterval: RollingInterval.Day,
                 outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
             .CreateLogger();
@@ -142,6 +142,7 @@ public class Program
         }
 
         logger.LogInformation("P2PChat 启动中...");
+        logger.LogInformation("数据目录: {DataDir}", Core.Extensions.DataPath.Root);
         logger.LogInformation("本地节点ID: {NodeId}", localNodeId.ToHexString());
         logger.LogInformation("实际端口: UDP={Udp}, TCP={Tcp}", actualUdpPort, actualTcpPort);
         if (bootstrapEndpoints.Count > 0)
