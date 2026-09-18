@@ -1,0 +1,28 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/implemented/process/2026-09-17-publish-profile-target-framework.md
+  zh: notes/implemented/process/2026-09-17-publish-profile-target-framework.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: Publish profile TargetFramework corrected from net10.0 to net11.0"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+    tokens: []
+  zh:
+    heading: "# Agent Note: 发布配置文件的 TargetFramework 由 net10.0 订正为 net11.0"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+    tokens: []
+
+recorded: 2026-09-18

@@ -35,6 +35,7 @@ logs/
 # ---- 本地工具配置 ----
 .claude/
 .codex-*
+.workbuddy-ai/
 .aot-*.log
 *.tmp
 

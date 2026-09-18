@@ -1,0 +1,28 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/implemented/bug-fix/2026-09-17-crypto-documentation-alignment.md
+  zh: notes/implemented/bug-fix/2026-09-17-crypto-documentation-alignment.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: Crypto algorithm comments corrected to match the implementation"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+    tokens: []
+  zh:
+    heading: "# Agent Note: 加密算法注释订正为实际实现"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+    tokens: []
+
+recorded: 2026-09-18
