@@ -22,7 +22,9 @@
 | 阶段 2 穿透 NAT | ⬜ 未开始 | 依赖「同局域网 / 跨网络」的确认 |
 | 阶段 3 安全与完整性 | ⬜ 未开始 | |
 | 阶段 4.4–4.6 测试策略（真实发现 / e2e） | ⬜ 未开始 | |
-| 各阶段对应的 Agent Note | ⬜ **欠账** | 按 `notes/README.md`，非平凡变更须在同一 PR 内附 Agent Note；阶段 0 的三项决策尚未落note |
+| 各阶段对应的 Agent Note | ✅ 阶段 0 已补 | 三份：`implemented/bug-fix` ×2 + `implemented/feature` ×1 |
+
+阶段 0 的提交为 `bab0635`（含三份 Agent Note 与本文档）。
 
 ### 阶段 0 实施记录
 
