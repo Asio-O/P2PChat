@@ -57,7 +57,8 @@ public class KeyExchangeHandler : IMessageHandler<KeyExchangeMessage>
             var identity = _keyStore.GetOrCreateIdentity();
             var response = new KeyExchangeMessage
             {
-                SenderId = identity.PublicKey.Take(NodeId.Size).ToArray(),
+                // 必须是本节点真实身份（SHA-1(公钥)），发起方据此把会话密钥登记到正确的对端键下。
+                SenderId = identity.NodeId.ToByteArray(),
                 ConversationId = message.ConversationId,
                 EphemeralPublicKey = ourEphemeral.PublicKey,
                 IsResponse = true

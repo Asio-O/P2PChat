@@ -21,6 +21,10 @@ public class MainlineDhtService : IDhtService, IDisposable
     private readonly ILogger<MainlineDhtService> _logger;
     private readonly Channel<PeerDiscoveryEventArgs> _peerChannel;
     private readonly ConcurrentDictionary<string, TaskCompletionSource<Dictionary<string, object>>> _pending = new();
+    /// <summary>
+    /// 静态对端（手工添加的联系人）—— 端点已知，不依赖 DHT 发现，也不受路由表淘汰影响。
+    /// </summary>
+    private readonly ConcurrentDictionary<string, NodeInfo> _staticPeers = new();
     private readonly List<IPEndPoint> _bootstrapNodes;
     private readonly int _alpha;
     private int _txCounter;
@@ -86,8 +90,30 @@ public class MainlineDhtService : IDhtService, IDisposable
     /// <inheritdoc />
     public async Task<NodeInfo?> FindNodeAsync(NodeId targetId, CancellationToken ct = default)
     {
+        // 静态对端优先：这是手工添加联系人时唯一可靠的直连手段。
+        // 公共 Mainline DHT 上没有任何节点为我们宣告 NodeId→端点 映射，
+        // 迭代 find_node 返回的只是靠近该 ID 的 BitTorrent 节点，精确匹配不可能命中。
+        if (_staticPeers.TryGetValue(targetId.ToHexString(), out var known))
+        {
+            _logger.LogDebug("命中静态对端: {NodeId} @ {EndPoint}",
+                targetId.ToHexString()[..8], known.EndPoint);
+            return known;
+        }
+
         var contacts = await IterativeFindNodeAsync(targetId, ct);
         return contacts.FirstOrDefault(c => c.NodeId.Equals(targetId));
+    }
+
+    /// <inheritdoc />
+    public void RegisterStaticPeer(NodeInfo node)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+
+        _staticPeers[node.NodeId.ToHexString()] = node;
+        // 同时入路由表，使 find_node 应答能把该对端报给其他节点（提升整体可发现性）。
+        _routingTable.AddOrUpdate(node);
+        _logger.LogInformation("登记静态对端: {NodeId} @ {EndPoint}",
+            node.NodeId.ToHexString()[..8], node.EndPoint);
     }
 
     /// <inheritdoc />

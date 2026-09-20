@@ -1,0 +1,28 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/implemented/bug-fix/2026-09-20-direction-agnostic-conversation-key.md
+  zh: notes/implemented/bug-fix/2026-09-20-direction-agnostic-conversation-key.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: Private conversation key must be direction-agnostic"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+    tokens: []
+  zh:
+    heading: "# Agent Note: 私聊会话键必须方向无关"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+    tokens: []
+
+recorded: 2026-09-20

@@ -23,6 +23,8 @@ public class KademliaDhtService : IDhtService, IDisposable
     private readonly ILogger<KademliaDhtService> _logger;
     private readonly Channel<PeerDiscoveryEventArgs> _peerChannel;
     private readonly ConcurrentDictionary<uint, TaskCompletionSource<DhtRpcMessage>> _pendingRequests = new();
+    /// <summary>静态对端（手工添加的联系人）—— 端点已知，优先于 DHT 查找。</summary>
+    private readonly ConcurrentDictionary<string, NodeInfo> _staticPeers = new();
     private readonly List<IPEndPoint> _bootstrapNodes;
     private readonly int _alpha; // 并行度
     private uint _requestIdCounter;
@@ -89,8 +91,27 @@ public class KademliaDhtService : IDhtService, IDisposable
     /// <inheritdoc />
     public async Task<NodeInfo?> FindNodeAsync(NodeId targetId, CancellationToken ct = default)
     {
+        // 静态对端优先（手工添加的联系人），与 MainlineDhtService 语义一致。
+        if (_staticPeers.TryGetValue(targetId.ToHexString(), out var known))
+        {
+            _logger.LogDebug("命中静态对端: {NodeId} @ {EndPoint}",
+                targetId.ToHexString()[..8], known.EndPoint);
+            return known;
+        }
+
         var contacts = await IterativeFindNodeAsync(targetId, ct);
         return contacts.FirstOrDefault(c => c.NodeId.Equals(targetId));
+    }
+
+    /// <inheritdoc />
+    public void RegisterStaticPeer(NodeInfo node)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+
+        _staticPeers[node.NodeId.ToHexString()] = node;
+        _routingTable.AddOrUpdate(node);
+        _logger.LogInformation("登记静态对端: {NodeId} @ {EndPoint}",
+            node.NodeId.ToHexString()[..8], node.EndPoint);
     }
 
     /// <inheritdoc />

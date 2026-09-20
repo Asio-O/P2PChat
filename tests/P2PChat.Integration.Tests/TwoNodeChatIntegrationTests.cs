@@ -49,8 +49,16 @@ public class TwoNodeChatIntegrationTests
         received.Content.ShouldBe(text);
         received.IsOutgoing.ShouldBeFalse();
         received.IsGroup.ShouldBeFalse();
-        received.ConversationId.ShouldBe(bob.LocalNode.NodeId.ToHexString());
         received.SenderId.ToByteArray().ShouldBe(alice.SenderId);
+
+        // 会话键必须方向无关：接收端用「对端（= 发送方）节点ID」必须能定位到同一个会话桶，
+        // 否则消息虽到达却落进一个 UI 永远选不中的桶（历史缺陷：ConversationId 用的是收件人 ID，
+        // 于是接收端拿到的是自己的 NodeId，UI 会话列表里永远看不到这条消息）。
+        var expectedConversationId = ConversationId.ForPrivate(bob.LocalNode.NodeId, alice.LocalNode.NodeId);
+        received.ConversationId.ShouldBe(expectedConversationId);
+        received.ConversationId.ShouldBe(
+            ConversationId.ForPrivate(alice.LocalNode.NodeId, bob.LocalNode.NodeId),
+            "A 与 B 两侧必须算出同一个会话键");
     }
 
     [Fact]

@@ -28,6 +28,15 @@ public sealed class P2PChatTui(
     private readonly Dictionary<string, List<string>> _messageHistory = new(StringComparer.Ordinal);
     private readonly ConcurrentQueue<(string Text, string Cid)> _inbox = new();   // 后台线程 → UI 线程
     private string _currentConversationId = string.Empty;
+    /// <summary>
+    /// 当前私聊会话的对端节点ID。
+    /// <para>
+    /// 必须与 <see cref="_currentConversationId"/> 分开保存：后者是**方向无关**的会话键
+    /// （两个 NodeId 拼接），不能反解出对端；发送时需要的是对端节点ID本身。
+    /// 群聊会话下为 <c>null</c>。
+    /// </para>
+    /// </summary>
+    private NodeId? _currentPeerId;
     private string _currentChatTitle = "未选择会话 - 使用 /help 查看命令";
     private volatile string _dhtStatus = "DHT: --";
     private volatile bool _isGroupChat, _dirty = true, _running, _plainMode;
@@ -128,15 +137,24 @@ public sealed class P2PChatTui(
     {
         Contact[] list;
         lock (_sync) list = _contacts.ToArray();
-        if (list.Length == 0) { AddSystemMessage("暂无联系人，使用 /add <节点ID> [别名] 添加"); return; }
+        if (list.Length == 0) { AddSystemMessage("暂无联系人，使用 /add <节点ID> [ip:port] [别名] 添加"); return; }
         _contactIndex = ((_contactIndex + delta) % list.Length + list.Length) % list.Length;
         var contact = list[_contactIndex];
-        _currentConversationId = contact.NodeId.ToHexString();
+        _currentPeerId = contact.NodeId;
+        _currentConversationId = PrivateConversationKey(contact.NodeId);
         _isGroupChat = false;
-        _currentChatTitle = $"私聊: {contact.Alias} ({Short(_currentConversationId)})";
+        _currentChatTitle = $"私聊: {contact.Alias} ({Short(contact.NodeId.ToHexString())})";
         _scrollFromEnd = 0;
         MarkDirty();
     }
+
+    /// <summary>
+    /// 本机与指定对端之间私聊会话的方向无关键。
+    /// 必须与 <c>ChatService.SendPrivateMessageAsync</c> 使用同一个函数，
+    /// 否则接收到的消息会落进一个 UI 选不中的会话桶。
+    /// </summary>
+    private string PrivateConversationKey(NodeId peerId)
+        => ConversationId.ForPrivate(dhtService.LocalNode.NodeId, peerId);
 
     private async Task ProcessCommandAsync(string command)
     {
@@ -150,7 +168,7 @@ public sealed class P2PChatTui(
             {
                 AddSystemMessage(cmd is "msg" or "pm" ? "用法: /msg <联系人|节点ID> <消息>"
                     : cmd == "file" ? "用法: /file send <联系人> <文件路径>"
-                    : cmd == "add" ? "用法: /add <节点ID(hex)> [别名]"
+                    : cmd == "add" ? "用法: /add <节点ID(hex,40位)> [ip:port] [别名]"
                     : cmd is "accept" or "reject" ? $"用法: /{cmd} <传输ID>"
                     : "用法: /group create <名称> 或 /group send <ID> <消息>");
                 return;
@@ -181,7 +199,8 @@ public sealed class P2PChatTui(
         try
         {
             if (_isGroupChat) await groupChatService.SendGroupMessageAsync(_currentConversationId, text);
-            else await chatService.SendPrivateMessageAsync(new NodeId(Convert.FromHexString(_currentConversationId)), text);
+            else if (_currentPeerId is { } peer) await chatService.SendPrivateMessageAsync(peer, text);
+            else { AddSystemMessage("请先选择联系人或群组"); return; }
             AddMessage($"我: {text}");
         }
         catch (Exception ex) { AddSystemMessage($"发送失败: {ex.Message}"); logger.LogWarning(ex, "发送消息失败"); }
@@ -195,9 +214,10 @@ public sealed class P2PChatTui(
         var contact = FindContact(target);
         if (contact == null) { AddSystemMessage($"未找到联系人: {target}"); return; }
         await chatService.SendPrivateMessageAsync(contact.NodeId, text);
-        _currentConversationId = contact.NodeId.ToHexString();
+        _currentPeerId = contact.NodeId;
+        _currentConversationId = PrivateConversationKey(contact.NodeId);
         _isGroupChat = false;
-        _currentChatTitle = $"私聊: {contact.Alias} ({Short(_currentConversationId)})";
+        _currentChatTitle = $"私聊: {contact.Alias} ({Short(contact.NodeId.ToHexString())})";
         AddMessage($"我 -> {contact.Alias}: {text}");
     }
     private async Task HandleGroupCommandAsync(string args)
@@ -221,6 +241,7 @@ public sealed class P2PChatTui(
                 var msg = rest[(idx + 1)..];
                 await groupChatService.SendGroupMessageAsync(known.GroupId, msg);
                 _currentConversationId = known.GroupId;
+                _currentPeerId = null;
                 _isGroupChat = true;
                 _currentChatTitle = $"群聊: {known.GroupName}";
                 AddMessage($"我: {msg}");
@@ -248,16 +269,74 @@ public sealed class P2PChatTui(
         }
         catch (Exception ex) { AddSystemMessage($"发送文件失败: {ex.Message}"); }
     }
+    /// <summary>
+    /// <c>/add &lt;节点ID(hex,40位)&gt; [ip:port] [别名]</c>
+    /// <para>
+    /// 给出 <c>ip:port</c> 时该对端会被登记为「静态对端」，无需任何 DHT 发现即可直连 ——
+    /// 这是当前唯一可靠的直连手段，因为公共 Mainline DHT 上没有任何节点为我们宣告
+    /// <c>NodeId → 端点</c> 映射，迭代 <c>find_node</c> 不可能命中对端。
+    /// </para>
+    /// </summary>
     private async Task AddContactCommandAsync(string args)
     {
-        var spaceIdx = args.IndexOf(' ');
-        var idText = (spaceIdx < 0 ? args : args[..spaceIdx]).Trim();
-        var alias = (spaceIdx < 0 ? "" : args[(spaceIdx + 1)..].Trim());
-        if (alias.Length == 0) alias = "未知";
-        var nodeId = new NodeId(Convert.FromHexString(idText));
-        await contactService.AddContactAsync(nodeId, alias);
+        var tokens = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length == 0)
+        {
+            AddSystemMessage("用法: /add <节点ID(hex,40位)> [ip:port] [别名]");
+            return;
+        }
+
+        NodeId nodeId;
+        try
+        {
+            var bytes = Convert.FromHexString(tokens[0]);
+            if (bytes.Length != NodeId.Size)
+            {
+                AddSystemMessage($"节点ID 必须是 {NodeId.Size} 字节（{NodeId.Size * 2} 位十六进制），当前 {bytes.Length} 字节");
+                return;
+            }
+            nodeId = new NodeId(bytes);
+        }
+        catch (FormatException)
+        {
+            AddSystemMessage($"节点ID 不是合法的十六进制串: {tokens[0]}");
+            return;
+        }
+
+        // 第二个 token 若能解析成 ip:port 就当作端点，否则当作别名。
+        System.Net.IPEndPoint? endPoint = null;
+        var aliasStart = 1;
+        if (tokens.Length > 1 && Core.Extensions.EndpointText.TryParse(tokens[1], out var parsed))
+        {
+            endPoint = parsed;
+            aliasStart = 2;
+        }
+
+        var alias = tokens.Length > aliasStart ? string.Join(' ', tokens[aliasStart..]) : "未知";
+        var endPointText = endPoint is null ? null : Core.Extensions.EndpointText.Format(endPoint);
+
+        await contactService.AddContactAsync(nodeId, alias, endPointText);
         await RefreshContactsAsync();
-        AddSystemMessage($"已添加联系人: {alias} ({Short(nodeId.ToHexString())})");
+
+        if (endPoint is not null)
+        {
+            // 登记为静态对端 → FindNodeAsync 直接命中，不经过 DHT。
+            dhtService.RegisterStaticPeer(new NodeInfo
+            {
+                NodeId = nodeId,
+                EndPoint = endPoint,
+                PublicKey = [],
+                State = PeerState.Online
+            });
+            AddSystemMessage($"已添加联系人: {alias} ({Short(nodeId.ToHexString())}) @ {endPointText}");
+            AddSystemMessage($"已登记为静态对端，现在可直接 /msg {alias} <消息>");
+        }
+        else
+        {
+            AddSystemMessage($"已添加联系人: {alias} ({Short(nodeId.ToHexString())})");
+            AddSystemMessage("提示: 未指定 ip:port。公共 DHT 无法发现任意节点，发送时很可能报「目标节点未找到」。");
+            AddSystemMessage("      建议改用: /add <节点ID> <ip:port> [别名]");
+        }
     }
     private async Task HandleTransferAsync(string transferId, bool accept)
     {
@@ -312,7 +391,8 @@ public sealed class P2PChatTui(
         AddSystemMessage("  /msg 或 /pm <联系人|节点ID> <消息>   发送私聊消息");
         AddSystemMessage("  /group create <名称> | /group send <群ID前缀> <消息> | /group list 列出已知群组");
         AddSystemMessage("  /file send <联系人> <文件路径> | /accept <传输ID> 接受 | /reject <传输ID> 拒绝");
-        AddSystemMessage("  /add <节点ID(hex)> [别名] | /help 帮助 | /quit 退出");
+        AddSystemMessage("  /add <节点ID(hex,40位)> [ip:port] [别名]   添加联系人（给出 ip:port 可免 DHT 直连）");
+        AddSystemMessage("  /help 帮助 | /quit 退出");
         AddSystemMessage("快捷键: F1=帮助 F2=添加联系人 F3=新建群组 F10=退出 Tab=切换联系人 PgUp/PgDn=滚动聊天");
         AddSystemMessage("P2PChat v1.1 - 基于Kademlia DHT的P2P聊天软件 (.NET 11 / 自绘控制台UI / AES-256-GCM)");
     }

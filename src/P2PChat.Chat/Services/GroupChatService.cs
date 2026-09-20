@@ -38,11 +38,13 @@ public class GroupChatService : IGroupChatService
         string groupName, IReadOnlyList<NodeId> initialMembers, CancellationToken ct = default)
     {
         // 生成群组ID和密钥
+        // 创建者身份必须是本节点真实身份（SHA-1(公钥)），不能用 PublicKey.Take(20)
+        // ——那是 P-256 SPKI DER 的固定算法头，对每个节点都相同。
         var identity = _keyStore.GetOrCreateIdentity();
-        var groupId = GenerateGroupId(groupName, new NodeId(identity.PublicKey.Take(20).ToArray()));
+        var creatorNodeId = identity.NodeId;
+        var groupId = GenerateGroupId(groupName, creatorNodeId);
         var groupKey = _encryption.GenerateRandomKey();
 
-        var creatorNodeId = new NodeId(identity.PublicKey.Take(20).ToArray());
         var memberIds = initialMembers.Select(m => m.ToByteArray()).ToList();
         if (!memberIds.Any(id => id.SequenceEqual(creatorNodeId.ToByteArray())))
             memberIds.Add(creatorNodeId.ToByteArray());
@@ -103,7 +105,7 @@ public class GroupChatService : IGroupChatService
             throw new InvalidOperationException("群组不存在: " + groupId);
 
         var identity = _keyStore.GetOrCreateIdentity();
-        var senderId = identity.PublicKey.Take(20).ToArray();
+        var senderId = identity.NodeId.ToByteArray();
 
         var message = new TextMessage
         {

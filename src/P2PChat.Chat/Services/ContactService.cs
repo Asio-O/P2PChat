@@ -38,17 +38,20 @@ public class ContactService : IContactService
     }
 
     /// <inheritdoc />
-    public Task AddContactAsync(NodeId nodeId, string alias, CancellationToken ct = default)
+    public Task AddContactAsync(NodeId nodeId, string alias, string? endPoint = null, CancellationToken ct = default)
     {
         var contact = new Contact
         {
             NodeId = nodeId,
             Alias = alias,
+            EndPoint = string.IsNullOrWhiteSpace(endPoint) ? null : endPoint.Trim(),
             AddedAt = DateTime.UtcNow
         };
         _contacts[nodeId.ToHexString()] = contact;
         SaveContacts();
-        _logger.LogInformation("添加联系人: {Alias} ({NodeId})", alias, nodeId.ToHexString()[..8]);
+        _logger.LogInformation("添加联系人: {Alias} ({NodeId}){EndPoint}",
+            alias, nodeId.ToHexString()[..8],
+            contact.EndPoint is null ? "" : $" @ {contact.EndPoint}");
         return Task.CompletedTask;
     }
 
@@ -113,6 +116,7 @@ public class ContactService : IContactService
                     {
                         NodeId = new NodeId(Convert.FromHexString(sc.NodeId)),
                         Alias = sc.Alias,
+                        EndPoint = sc.EndPoint,
                         AddedAt = sc.AddedAt
                     };
                 }
@@ -133,6 +137,7 @@ public class ContactService : IContactService
             {
                 NodeId = c.NodeId.ToHexString(),
                 Alias = c.Alias,
+                EndPoint = c.EndPoint,
                 AddedAt = c.AddedAt
             }).ToList();
 

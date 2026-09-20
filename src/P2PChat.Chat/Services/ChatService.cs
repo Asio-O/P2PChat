@@ -70,11 +70,18 @@ public class ChatService : IChatService
         // 明文仅在本地事件和接收端解密后的 ChatMessageEvent 中出现。
         var encryptedContent = _encryption.Encrypt(Encoding.UTF8.GetBytes(text), sessionKey);
 
+        // 会话键必须**方向无关**：发送方与接收方必须算出同一个字符串。
+        // 历史上这里写 recipientId，导致接收方收到的键是它自己的 NodeId，
+        // 而 UI 的会话桶以「对端 ID」为键 → 消息投进一个永远选不中的桶。
+        var conversationId = ConversationId.ForPrivate(identity.NodeId, recipientId);
+
         // 3. 构建并发送消息
+        // SenderId 必须是本节点的真实身份（SHA-1(公钥)）。
+        // 不要退回 PublicKey.Take(20)：那是 P-256 SPKI DER 的固定算法头，对每个节点都相同。
         var message = new TextMessage
         {
-            SenderId = identity.PublicKey.Take(20).ToArray(), // 简化: 用公钥前20字节作ID
-            ConversationId = recipientId.ToHexString(),
+            SenderId = identity.NodeId.ToByteArray(),
+            ConversationId = conversationId,
             Content = Convert.ToBase64String(encryptedContent),
             IsGroup = false
         };
@@ -85,9 +92,9 @@ public class ChatService : IChatService
         await _messageChannel.Writer.WriteAsync(new ChatMessageEvent
         {
             Content = text,
-            SenderId = new NodeId(message.SenderId),
+            SenderId = identity.NodeId,
             Timestamp = DateTimeOffset.FromUnixTimeMilliseconds(message.Timestamp).UtcDateTime,
-            ConversationId = message.ConversationId,
+            ConversationId = conversationId,
             IsGroup = false,
             IsOutgoing = true
         }, ct);
@@ -121,7 +128,7 @@ public class ChatService : IChatService
 
         var request = new KeyExchangeMessage
         {
-            SenderId = identity.PublicKey.Take(20).ToArray(),
+            SenderId = identity.NodeId.ToByteArray(),
             ConversationId = recipient.NodeId.ToHexString(),
             EphemeralPublicKey = ephemeralKey.PublicKey,
             IsResponse = false

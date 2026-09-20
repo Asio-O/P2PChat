@@ -59,6 +59,9 @@ public sealed class FakeDhtService : IDhtService
     public Task<NodeInfo?> FindNodeAsync(NodeId targetId, CancellationToken ct = default)
         => Task.FromResult(_nodes.TryGetValue(targetId.ToHexString(), out var n) ? n : null);
 
+    /// <summary>登记静态对端 —— 与真实实现的语义一致：FindNodeAsync 必定能命中。</summary>
+    public void RegisterStaticPeer(NodeInfo node) => Register(node);
+
     public Task StoreAsync(byte[] key, byte[] value, CancellationToken ct = default) => Task.CompletedTask;
 
     public Task<byte[]?> FindValueAsync(byte[] key, CancellationToken ct = default) => Task.FromResult<byte[]?>(null);

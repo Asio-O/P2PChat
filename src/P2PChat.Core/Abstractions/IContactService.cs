@@ -15,7 +15,14 @@ public interface IContactService
     /// <summary>
     /// 添加联系人
     /// </summary>
-    Task AddContactAsync(NodeId nodeId, string alias, CancellationToken ct = default);
+    /// <param name="nodeId">对端节点ID</param>
+    /// <param name="alias">别名</param>
+    /// <param name="endPoint">
+    /// 可选显式端点（<c>ip:port</c>）。指定后该对端无需 DHT 发现即可直连，
+    /// 这是当前唯一可靠的直连手段（公共 DHT 无法解析任意 NodeId）。
+    /// </param>
+    /// <param name="ct">取消标记</param>
+    Task AddContactAsync(NodeId nodeId, string alias, string? endPoint = null, CancellationToken ct = default);
 
     /// <summary>
     /// 移除联系人

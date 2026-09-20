@@ -69,4 +69,18 @@ public record KeyPair
 {
     public required byte[] PublicKey { get; init; }
     public required byte[] PrivateKey { get; init; }
+
+    /// <summary>
+    /// 本密钥对对应的**节点身份** —— 线路上的一切 SenderId 必须使用它。
+    /// <para>
+    /// 由公钥经 SHA-1 派生（见 <see cref="Models.NodeId.FromPublicKey"/>）。
+    /// </para>
+    /// <para>
+    /// <b>不要</b>改用 <c>PublicKey.Take(20)</c>：公钥是 P-256 SubjectPublicKeyInfo (DER，91 字节)，
+    /// 其前 27 字节是与密钥内容无关的固定算法头，因此 <c>Take(20)</c> 会为**每个节点**产出
+    /// 完全相同的一串字节，导致身份标识失去意义（会话密钥槽位互相覆盖、联系人别名无法解析）。
+    /// 2026-09-20 的缺陷修复即为此。
+    /// </para>
+    /// </summary>
+    public Models.NodeId NodeId => Models.NodeId.FromPublicKey(PublicKey);
 }

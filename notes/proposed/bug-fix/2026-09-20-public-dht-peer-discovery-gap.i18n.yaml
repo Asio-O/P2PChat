@@ -1,0 +1,32 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/proposed/bug-fix/2026-09-20-public-dht-peer-discovery-gap.md
+  zh: notes/proposed/bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: Public DHT cannot discover peer nodes"
+    status: "Status: proposed"
+    sections:
+      - Problem
+      - Proposal
+      - Announced endpoint semantics
+      - Alternatives considered
+      - Acceptance criteria
+      - Risks
+    tokens: []
+  zh:
+    heading: "# Agent Note: 公共 DHT 无法发现对端节点"
+    status: "Status: proposed"
+    sections:
+      - Problem
+      - Proposal
+      - Announced endpoint semantics
+      - Alternatives considered
+      - Acceptance criteria
+      - Risks
+    tokens: []
+
+recorded: 2026-09-20

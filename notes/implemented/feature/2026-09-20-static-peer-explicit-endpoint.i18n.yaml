@@ -1,0 +1,30 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/implemented/feature/2026-09-20-static-peer-explicit-endpoint.md
+  zh: notes/implemented/feature/2026-09-20-static-peer-explicit-endpoint.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: Direct connect via an explicit endpoint (static peers)"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+      - Deferred
+    tokens: []
+  zh:
+    heading: "# Agent Note: 显式端点直连（静态对端）"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+      - Deferred
+    tokens: []
+
+recorded: 2026-09-20

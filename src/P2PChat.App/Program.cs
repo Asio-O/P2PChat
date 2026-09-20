@@ -193,6 +193,10 @@ public class Program
             if (bootstrapEndpoints.Count > 0)
                 _ = dhtService.BootstrapAsync(CancellationToken.None);
 
+            // 把带显式端点的联系人登记为「静态对端」：手工添加的联系人无需任何 DHT 发现即可直连。
+            // 公共 Mainline DHT 上没有任何节点为我们宣告 NodeId→端点 映射，因此这是当前唯一可靠的直连手段。
+            RegisterStaticPeersFromContacts(provider, dhtService, logger);
+
             var dht = (MainlineDhtService)dhtService;
             var dhtCts = new CancellationTokenSource();
             _ = dht.StartReceivingAsync(dhtCts.Token);
@@ -254,6 +258,47 @@ public class Program
             {
                 logger.LogError(ex, "TCP接受连接异常");
             }
+        }
+    }
+
+    /// <summary>
+    /// 把持久化联系人里带显式端点的那些登记为静态对端。
+    /// <para>
+    /// 这样重启后无需重新 <c>/add</c> 即可直连；端点无法解析的条目跳过并告警，不阻断启动。
+    /// </para>
+    /// </summary>
+    private static void RegisterStaticPeersFromContacts(
+        IServiceProvider provider, IDhtService dhtService, Microsoft.Extensions.Logging.ILogger logger)
+    {
+        try
+        {
+            var contacts = provider.GetRequiredService<IContactService>()
+                .GetAllContactsAsync().GetAwaiter().GetResult();
+
+            foreach (var contact in contacts)
+            {
+                if (string.IsNullOrWhiteSpace(contact.EndPoint))
+                    continue;
+
+                if (!Core.Extensions.EndpointText.TryParse(contact.EndPoint, out var endPoint))
+                {
+                    logger.LogWarning("联系人 {Alias} 的端点无法解析，已忽略: {EndPoint}",
+                        contact.Alias, contact.EndPoint);
+                    continue;
+                }
+
+                dhtService.RegisterStaticPeer(new NodeInfo
+                {
+                    NodeId = contact.NodeId,
+                    EndPoint = endPoint,
+                    PublicKey = [],
+                    State = Core.Enums.PeerState.Online
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "加载静态对端失败");
         }
     }
 

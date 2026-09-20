@@ -21,6 +21,20 @@ public interface IDhtService
     Task<NodeInfo?> FindNodeAsync(NodeId targetId, CancellationToken ct = default);
 
     /// <summary>
+    /// 登记一个「静态对端」：端点已知、无需 DHT 查找。
+    /// <para>
+    /// 手工添加的联系人（<c>/add &lt;节点ID&gt; &lt;ip:port&gt;</c>）走这条路径。
+    /// <see cref="FindNodeAsync"/> 必须**优先**返回静态对端，再退回 DHT 迭代查找，
+    /// 且静态登记不受路由表淘汰影响。
+    /// </para>
+    /// <para>
+    /// 存在理由：公共 Mainline DHT 上没有任何节点为我们宣告 <c>NodeId → 端点</c> 映射，
+    /// 因此迭代 <c>find_node</c> 不可能命中对端；静态对端是当前唯一可靠的直连手段。
+    /// </para>
+    /// </summary>
+    void RegisterStaticPeer(NodeInfo node);
+
+    /// <summary>
     /// 向DHT存储键值对 (会复制到k个最近的节点)
     /// </summary>
     Task StoreAsync(byte[] key, byte[] value, CancellationToken ct = default);

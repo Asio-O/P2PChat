@@ -46,8 +46,15 @@ public sealed class NodeHarness : IAsyncDisposable
     /// <summary>监听端口（真实绑定的端口）。</summary>
     public int Port => Tcp.ListenPort;
 
-    /// <summary>消息层使用的 SenderId（与 ChatService 一致：公钥前 20 字节）。</summary>
-    public byte[] SenderId => Identity.PublicKey.Take(20).ToArray();
+    /// <summary>
+    /// 消息层使用的 SenderId —— 必须与本节点真实身份一致。
+    /// <para>
+    /// 曾经写成 <c>Identity.PublicKey.Take(20)</c>，那是 P-256 SPKI DER 的固定算法头，
+    /// 对每个节点都是同一串字节；测试脚手架这样复刻后，实现里的同一缺陷就永远测不出来。
+    /// 现在直接复用生产代码的唯一定义点 <see cref="KeyPair.NodeId"/>。
+    /// </para>
+    /// </summary>
+    public byte[] SenderId => Identity.NodeId.ToByteArray();
 
     public static NodeHarness Start(string name)
     {
