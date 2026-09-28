@@ -1,0 +1,34 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/implemented/bug-fix/2026-09-28-connect-hello-response-verification.md
+  zh: notes/implemented/bug-fix/2026-09-28-connect-hello-response-verification.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: /connect's hello response was never verified (unauthenticated peer introduction)"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+      - Comment discipline
+      - Deferred
+      - Related
+    tokens: []
+  zh:
+    heading: "# Agent Note: /connect 的 hello 响应未经任何验签（未经认证的对端引入）"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+      - Comment discipline
+      - Deferred
+      - Related
+    tokens: []
+
+recorded: 2026-09-28

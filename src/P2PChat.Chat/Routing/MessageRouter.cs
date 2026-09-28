@@ -24,7 +24,13 @@ public class MessageRouter : IMessageRouter
     private readonly ConcurrentDictionary<MessageType, IMessageHandler> _handlers = new();
     private readonly ConcurrentDictionary<string, ITcpConnection> _connectionPool = new();
     private readonly ConcurrentDictionary<Guid, TaskCompletionSource<Message>> _pendingResponses = new();
-    private const int MaxConnectionsPerPeer = 3;
+
+    // 历史遗留：这里曾有一个 `private const int MaxConnectionsPerPeer = 3;`，
+    // 但**从未有任何逻辑读取它** —— 「每对端最多 3 条连接」在今天并不成立，
+    // 留着它只会误导下一个人以为该上限真实存在（Agent.md 也曾照抄这段）。
+    // 真要实现连接上限应当作为独立任务设计（淘汰哪一条、如何通知在途请求），
+    // 不能靠一个从不生效的常量假装已实现，故删除。
+
     private uint _seqCounter;
 
     /// <param name="replayGuard">
@@ -248,52 +254,21 @@ public class MessageRouter : IMessageRouter
 
     /// <summary>
     /// 验签并返回是否通过；若失败给出原因。
+    /// <para>
+    /// 实现已收敛到 <see cref="EnvelopeVerifier"/>（Core 层唯一真相源）。
+    /// 本方法保留为薄封装，供既有调用方与测试继续使用。
+    /// <para>
+    /// 收敛的理由与 <see cref="EnvelopeCodec"/> 完全相同：UI 层不引用 Chat 层，
+    /// 此前 <c>P2PChatTui.ReadHelloResponseAsync</c> 因此只能<b>完全不验签</b>，
+    /// 让 <c>/connect</c> 对任意应答主机无条件信任。唯一正确的修法是把验签下沉到 Core，
+    /// 而不是让 UI 再抄一份（抄一份 = 制造下一个漂移点）。
+    /// </para>
     /// </summary>
     public static bool VerifyEnvelope(MessageEnvelope envelope, IEncryptionService encryption, out string? failureReason)
-    {
-        ArgumentNullException.ThrowIfNull(encryption);
-        return VerifyEnvelopeCore(envelope, encryption, out failureReason);
-    }
+        => EnvelopeVerifier.Verify(envelope, encryption, out failureReason);
 
     private static bool VerifyEnvelopeCore(MessageEnvelope envelope, IEncryptionService encryption, out string? failureReason)
-    {
-        if (envelope.Signature == null || envelope.Signature.Length == 0)
-        {
-            failureReason = "缺少签名";
-            return false;
-        }
-        if (envelope.SenderPublicKey == null || envelope.SenderPublicKey.Length == 0)
-        {
-            failureReason = "缺少发送方公钥";
-            return false;
-        }
-
-        // 校验 SenderId 必须等于公钥派生的 NodeId —— 阻止 SenderId 冒名
-        try
-        {
-            var derivedNodeId = NodeId.FromPublicKey(envelope.SenderPublicKey).ToByteArray();
-            if (!derivedNodeId.AsSpan().SequenceEqual(envelope.SenderId))
-            {
-                failureReason = "SenderId 与 SenderPublicKey 不匹配";
-                return false;
-            }
-        }
-        catch (Exception ex)
-        {
-            failureReason = "SenderPublicKey 解析失败: " + ex.Message;
-            return false;
-        }
-
-        var data = EnvelopeCodec.ComputeSignedBytes(envelope);
-        if (!encryption.Verify(data, envelope.Signature, envelope.SenderPublicKey))
-        {
-            failureReason = "ECDSA 验签失败";
-            return false;
-        }
-
-        failureReason = null;
-        return true;
-    }
+        => EnvelopeVerifier.Verify(envelope, encryption, out failureReason);
 
     /// <summary>
     /// 序列化整条信封到字节：固定头 + 长度前缀 SenderPublicKey + 长度前缀 Signature + Payload。

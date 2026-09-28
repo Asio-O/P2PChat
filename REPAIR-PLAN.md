@@ -14,9 +14,9 @@
 
 ## 实施进度
 
-> 🕐 **进度状态：阶段 0–4 于 2026-09-28 上一轮收口（e2e 实测 `FAIL=0`）。**
-> **该结论之后本仓库已进入新一轮改动**（入站重放防护 + 若干独立修复），门禁**尚未复跑**。
-> 下方各阶段的 ✅ 反映的是**上一轮收口时的实测状态**；引用其门禁数字前请重新跑一遍。
+> 🕐 **进度状态：阶段 0–4 于 2026-09-28 本轮收口（e2e 实测 `PASS=41 / FAIL=0`）。**
+> 本轮同时修掉了「收到的消息从不显示」（B3 同类复发）与入站重放防护。
+> 下方各阶段的 ✅ 反映的是**本轮收口时的实测状态**；若后续再有改动，**引用其门禁数字前请重新跑一遍**。
 
 > 🚧 **一个前提问题至今没有答案，直接影响上表的阶段 2 结论。**
 >
@@ -36,7 +36,7 @@
 | **阶段 2** 穿透 NAT | ✅ **已完成（2.4 除外）**（2026-09-21） | UPnP IGD（裸 SSDP + SOAP，刻意不用 COM 以保 AOT）TCP/UDP 同端口映射、退出时释放租约、TUI 显式降级提示。**2.4 中继 / 打洞未做**（原标注为可选）。跨网络建连链**已闭合** —— `announce_peer` 用「UDP 包源 IP + 宣告的 TCP 端口」直接拼出公网可达的 `NodeInfo.EndPoint`，见「阶段 2.2 / 2.2b」。决策：[`notes/implemented/bug-fix/2026-09-21-nat-traversal.zh.md`](notes/implemented/bug-fix/2026-09-21-nat-traversal.zh.md) |
 | **阶段 3** 安全与完整性 | ✅ **已完成**（2026-09-21） | 3.1 群消息 AES-256-GCM 加密 / 3.2 长期 ECDSA 消息签名（含四道入口关卡）/ 3.3 群组元数据持久化 / 3.4 文件分块改用 `state.ChunkSize`。见「阶段 3 实施记录」。决策：[群消息加密](notes/implemented/bug-fix/2026-09-21-group-message-encryption.zh.md)、[消息签名](notes/implemented/bug-fix/2026-09-21-message-signing.zh.md)、[群元数据持久化](notes/implemented/bug-fix/2026-09-21-group-metadata-persistence.zh.md)、[文件分块大小](notes/implemented/bug-fix/2026-09-21-filetransfer-chunksize.zh.md) |
 | **阶段 4.1–4.3** 测试策略（防复发部分） | ✅ **已完成** | `NodeHarness.SenderId` 已改为复用生产代码的 `KeyPair.NodeId`；新增 25 条守卫断言 |
-| **阶段 4.4–4.6** 测试策略（真实发现 / e2e） | ✅ **已完成**（2026-09-28 收口） | 4.4 `RealDiscoveryTests` 4 条真实 KRPC 闭环 / 4.5 `KnownDefectsTests` 6 条回归守卫（死 skip 分支已删）/ 4.6 `e2e-verify.ps1` A29–A32 明文往返断言。**e2e 已实测 `PASS=39 / FAIL=0 / SKIP=0`，退出码 0**（起始基线 32/5）。见「阶段 4.4–4.6 实施记录」与 `HANDOFF.md` §4 |
+| **阶段 4.4–4.6** 测试策略（真实发现 / e2e） | ✅ **已完成**（2026-09-28 收口） | 4.4 `RealDiscoveryTests` 真实 KRPC 闭环 / 4.5 `KnownDefectsTests` 6 条回归守卫（死 skip 分支已删）/ 4.6 `e2e-verify.ps1` 明文往返断言 A29–A32 + A29a/A29b/A33/A34。**最新 e2e 实测 `PASS=41 / FAIL=0 / SKIP=0`，退出码 0**（起始基线 32/5）。⚠️ **上一轮记的 `PASS=39/FAIL=0` 对「消息显示」是假绿灯**，见下方与 `HANDOFF.md` §8.1.2 |
 | 各阶段对应的 Agent Note | ✅ 阶段 0–3 已补 | 阶段 0–3 + `/connect` 共 **10 组**（`implemented/bug-fix` ×8 + `implemented/feature` ×2）；全库 `notes/` 下已无 `Status: proposed` |
 
 阶段 0 的提交为 `bab0635`（含三份 Agent Note 与本文档）；阶段 1–3 与阶段 4 的代码**目前仍在工作区未提交**，
@@ -132,34 +132,36 @@
 | 4.5 | 清理 `KnownDefectsTests.cs`：删除 6 个 `SkipException` 动态跳过分支，以及其中引用**已不存在代码行号**的失效文案；6 条测试重写为「回归守卫」真实断言 | `tests/P2PChat.Integration.Tests/KnownDefectsTests.cs`，6 条：`:51` / `:76` / `:117` / `:223` / `:284` / `:367` | 6 条全 pass，**0 skip**（改回旧实现任一条即变红） |
 | 4.6 | e2e 明文往返断言：Phase 2 拉起 nodeA2 / nodeB2 两实例互发一条带随机明文的消息，断言接收端日志出现该明文 | `scripts/e2e-verify.ps1` A29 / A29a / A29b / A30 / A31 / A32 —— A29a 守「预置的 `contacts.json` 启动后仍在」、A29b 守「是单层数组 + `StoredContact` 对象」、A32 守「nodeA2 的**聊天事件行**若含明文**必须**标为『我』」 | ✅ **实测通过** —— e2e `PASS=39 / FAIL=0 / SKIP=0`，退出码 0。**A32 是修正了一条错误断言（原前提把正确的本地回显当成 bug），语义变严格而非放宽**，详见 `HANDOFF.md` §4.4 |
 
-### 验证结果（2026-09-28 收口，全部为实测值）
+### 验证结果（2026-09-28 本轮重放防护轮收口，全部为实测值）
 
 - `dotnet build P2PChat.slnx -t:Rebuild`：**0 个错误 0 个警告**。
-- `dotnet test P2PChat.slnx`：**297 通过 / 0 失败 / 0 跳过**
-  （演进轨迹：阶段 0 前 121 → 阶段 0 后 146 → 本轮中途 179 → **收口 297**）。
-  分项目：`Crypto.Tests` 8 / `Core.Tests` 52 / **`Chat.Tests` 80（原为 0，本轮从空壳填起）** /
-  `Integration.Tests` 134 / `Networking.Tests` 23。
+- `dotnet test P2PChat.slnx`：**340 通过 / 0 失败 / 0 跳过**
+  （演进轨迹：阶段 0 前 121 → 阶段 0 后 146 → 中途 179 → 上一轮 297 → **本轮 340**）。
+  分项目：`Crypto.Tests` 8 / `Core.Tests` 52 / `Chat.Tests` **110**（原 0）/ `Integration.Tests` **147** / `Networking.Tests` 23。
+- **AOT 发布**：`dotnet publish -c Release` 成功，**我方代码 0 条** IL/AOT 警告；
 - 阶段 0 之后新增的守卫测试：`RealDiscoveryTests` 4 条、`UpnpClientTests` 6 条、`MessageSigningTests` 8 条、
   `BencodeTests` compact-peer 3 条、群消息加密 4 条、群元数据持久化 5 条、文件 ChunkSize 2 条、
   `KnownDefectsTests` 回归守卫 6 条、`Chat.Tests` 80 条、`EnvelopeCodec` 边界测试 15 条、
   `ContactService.LoadContacts` 回归 3 条、plain 模式分派测试若干。
-- **e2e（2026-09-28，Lead 亲自跑）**：`PASS=39 / FAIL=0 / SKIP=0`，**退出码 0**（起始基线 32/5）。
+- **e2e（2026-09-28，Lead 亲自跑）**：`PASS=41 / FAIL=0 / SKIP=0`，**退出码 0**（起始基线 32/5）。
   过程中发现并修掉 e2e 脚本**连续三个静默失败**（预置 `contacts.json` 被删 / `ConvertTo-Json` 单元素塌缩 /
   `-AsArray` 造成嵌套数组），并新增 A29a / A29b 两条前置断言让这类静默失败**当场变红**。
   详见 `HANDOFF.md` §4.3–§4.5。
+  ⚠️ **上一轮记的 `PASS=39 / FAIL=0` 对「消息显示」而言是假绿灯** ——
+  A30/A31 可被一条含明文的 Serilog 日志行满足，而当时「消息从不显示」缺陷仍在。
+  本轮修复唯一事件源后 `PASS=41` 才同时覆盖显示通路。详见 `HANDOFF.md` §8.1.2。
 - **AOT 发布（2026-09-28，Lead 执行）**：`dotnet publish -c Release` 成功，**我方代码 0 条** IL/AOT 警告；
   产物另有 **4 条第三方程序集警告**（`MessagePack.dll` 的 IL3053 + IL2104、`Serilog.dll` 的 IL2104）。
   ⚠️ **不要把这一格简写成「0」** —— 它是「第三方自身代码路径不 trim 友好、我们不走那些路径」这一
   **人工判断**的结果，不是工具自动判定的门禁达成。详见 `HANDOFF.md` §3.1。
 
-> 📌 测试数与门禁数字均为 **2026-09-28 上一轮收口实测值**。
-> **本文档进入新一轮改动后这些数字即已过期** —— 改动代码后**引用前请重新跑一遍**。
+> 📌 上述为 **2026-09-28 本轮收口实测值**。再次改动代码后**引用前请重新跑一遍**。
 > 权威性来自新鲜度，不来自排版工整。
 
 ### 已知遗留（2026-09-28，本轮重放防护轮已收口）
 
 - 🔴 **REPAIR-PLAN §四的前提问题仍未获用户答复**（「同局域网 vs 跨网络」）——
-  见本文顶部提示。**已向用户询问两次。** 这是唯一**阻塞验收**的开放项。见 `HANDOFF.md` §8 #1。
+  见本文顶部提示。**已向用户询问 3 次（2026-09-28）仍未答复。** 这是唯一**阻塞验收**的开放项。见 `HANDOFF.md` §8 #1。
   ⚠️ **代码完备 ≠ 覆盖了用户的实际场景** —— 不要因为「实现已完成」就把它关掉。
 - 🔴 **`/connect` 的 hello 响应全程不验签 —— 未经认证的对端引入**（2026-09-28 浮现）。
   任何抢在真节点前应答的主机都会被无条件信任并登记为静态对端。
@@ -183,9 +185,10 @@
   TUI 读的是 `ChatService._messageChannel`，**三者互不相通**，且 `PublishMessageAsync` 在 `src/**`
   **零调用者** ⇒ 用户看得到自己发的，**永远看不到任何人发来的**（私聊 + 群聊同时中招）。
   修法：新增 `IChatEventPublisher` 作为**唯一事件源**，`src` 内该 Channel 由 3 处降为 1 处。
-  **潜伏机制比缺陷本身更值得记 —— 见 `HANDOFF.md` §8.1.2 与 §7.2 的不署名教训。**
+  **潜伏机制比缺陷本身更值得记 —— 见 `HANDOFF.md` §8.1.2 与 §7.3 的不署名教训**
+  （(a) 测试侧：断言绿了但**对象**错了；(b) 文档侧：证据绿了但**范围**错了 —— 同一个陷阱的两个面）。
   **性质是接口冗余 / 文档误导，不是功能缺陷** —— 建议删除该死字段或补齐其语义，
-  而**不是**去补连连逻辑。详见「阶段 2.2b」与 `HANDOFF.md` §8 #7。
+  而**不是**去补连连逻辑。详见「阶段 2.2b」与 `HANDOFF.md` §8 #6。
 
 ### 阶段 0 / 1 / 2 / 3 的历史遗留（收口时状态）
 
@@ -394,5 +397,7 @@ nodeB: MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE l5Xxzmn...
 - 跨网络 → 阶段 2 是硬需求；还需确认你能否在路由器上做端口映射（决定 2.1 用 UPnP 还是手工映射）。
 
 这个答案会显著改变阶段 2 的必要性与工作量，因此建议先确认再开工。
+
+
 
 

@@ -40,7 +40,7 @@ Wiring and visibility: the config item `P2PChat:ReplayMaxAgeSeconds` (`double`, 
 
 The root cause is that a sequence window requires sequence numbers to be globally monotonic and gap-free across restarts and across code paths. This protocol has no such guarantee.
 
-**Fold the policy into `MessageRouter.VerifyEnvelope`.** Rejected: `VerifyEnvelope` is **purely cryptographic**, stateless and re-callable, and `MessageSigningTests` invokes it directly in 9 places. Stuffing a stateful policy inside it corrupts its semantics — **verifying the same envelope twice would make the second call fail**. That is not "stricter", it is turning a pure function into a side-effecting one. And it would blow up a batch of cryptographically correct tests, burying the real failures in noise. Policy and cryptography must stay separate.
+**Fold the policy into `MessageRouter.VerifyEnvelope`.** Rejected: `VerifyEnvelope` is **purely cryptographic**, stateless and re-callable, and `MessageSigningTests` has 5 direct call sites of `MessageRouter.VerifyEnvelope(`. Stuffing a stateful policy inside it corrupts its semantics — **verifying the same envelope twice would make the second call fail**. That is not "stricter", it is turning a pure function into a side-effecting one. And it would blow up a batch of cryptographically correct tests, burying the real failures in noise. Policy and cryptography must stay separate.
 
 **Time window only, no `MessageId` dedup.** Rejected: a one-hour window does nothing against "record one packet, replay it ten thousand times" — the most economical attack there is — because the attacker only has to replay inside the window.
 

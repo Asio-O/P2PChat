@@ -515,8 +515,7 @@ public sealed class P2PChatTui(
     /// <para>
     /// 思路：构造一个 NodeId 随机但 EndPoint 已知的临时 <see cref="NodeInfo"/>，
     /// 通过路由器建立一条 TCP 连接，发一次 <see cref="KeyExchangeMessage"/> 充当 hello；
-    /// 读取对端的响应信封，从中拿到 <c>envelope.SenderId</c> = 对端真实 NodeId
-    /// （由 <see cref="Handlers.KeyExchangeHandler"/> 写入），随后：
+    /// 读取对端的响应信封，<b>验签并校验回显</b>后从中拿到对端的真实 NodeId 与长期公钥，随后：
     /// </para>
     /// <list type="number">
     ///   <item>用本地临时私钥 + 响应中的对端临时公钥派生会话密钥并写入 <see cref="IKeyStore"/>；</item>
@@ -531,15 +530,43 @@ public sealed class P2PChatTui(
     /// 临时连接本身在使用后立刻关闭 —— 路由器连接池以 NodeId 为键，下一次 /msg
     /// 会以「真实 NodeId」重新建立连接，因此原连接不进入池。
     /// </para>
+    /// <para>
+    /// <b>安全模型（务必读完再改）</b>：本命令的前提就是「我不知道对方是谁」，
+    /// 因此它<b>不可能</b>做到端到端身份认证，只能做到三件事：
+    /// <list type="bullet">
+    ///   <item>① <b>验签</b>：应答方必须持有它自己那把私钥，且 <c>NodeId.FromPublicKey(公钥) == SenderId</c>。
+    ///         这挡掉的是「拿自己的密钥、却冒用别人的 SenderId」——那种情况下会话密钥会被记到
+    ///         <b>第三方</b> 名下，之后发给那位第三方的每条私聊都会被攻击者解密。</item>
+    ///   <item>② <b>回显校验</b>：应答必须回显本次 hello 的一次性 <c>ConversationId</c>，挡掉跨受害者重放。</item>
+    ///   <item>③ <b>端点→身份连续性</b>：同一端点前后身份必须一致（可 <c>--force</c> 显式放行本次）。</item>
+    /// </list>
+    /// 这三条<b>都不</b>等价于「我知道你在跟谁说话」。首次接触未知端点时，攻击者用自己的
+    /// 密钥自签的信封在密码学上完全有效、无法与合法节点区分 —— 这就是 TOFU，
+    /// 所以首次接触必须**如实告知用户**，绝不能显示「已验证」。
+    /// </para>
     /// </summary>
     private async Task ConnectCommandAsync(string args)
     {
         var tokens = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (tokens.Length != 1)
+        if (tokens.Length is < 1 or > 2)
         {
-            AddSystemMessage("用法: /connect <ip:port>");
+            AddSystemMessage("用法: /connect <ip:port> [--force]");
             return;
         }
+
+        // --force 只豁免「本次会话的端点身份冲突判定」，它**不是**永久改写已登记的身份。
+        var force = false;
+        foreach (var flag in tokens.Skip(1))
+        {
+            if (!string.Equals(flag, "--force", StringComparison.Ordinal))
+            {
+                AddSystemMessage($"无法识别的参数: {flag}");
+                AddSystemMessage("用法: /connect <ip:port> [--force]");
+                return;
+            }
+            force = true;
+        }
+
         if (!Core.Extensions.EndpointText.TryParse(tokens[0], out var endPoint))
         {
             AddSystemMessage($"无法解析端点: {tokens[0]}（必须是字面 ip:port，不做 DNS）");
@@ -578,12 +605,51 @@ public sealed class P2PChatTui(
             };
             await router.SendViaConnectionAsync(connection, hello, helloCts.Token);
 
-            var (response, peerPublicKey) = await ReadHelloResponseAsync(connection, helloCts.Token);
-            var peerId = new NodeId(response.SenderId);
+            // ★ 关键改动：hello 响应此前**完全不验签**，这里现在会先做回显校验 + ECDSA 验签，
+            // 失败即抛 HelloRejectedException —— 在那之前不会写会话密钥、不会登记静态对端。
+            var helloResponse = await ReadHelloResponseAsync(
+                connection, hello.ConversationId, helloCts.Token);
+
+            var peerId = helloResponse.PeerNodeId;      // 从**公钥**派生，不取载荷里的 SenderId
+            var peerPublicKey = helloResponse.PeerPublicKey;
             var peerHex = peerId.ToHexString();
 
+            // 端点→身份连续性检查。pin 的来源说明见 KnownEndpointIdentities()。
+            var verdict = EvaluateEndpointIdentity(endPoint, peerId);
+            if (verdict == EndpointIdentityVerdict.Conflicts)
+            {
+                var previous = KnownEndpointIdentities(endPoint)
+                    .First(n => n.EndPoint.Equals(endPoint)).NodeId.ToHexString()[..8];
+
+                if (!force)
+                {
+                    throw new HelloRejectedException(
+                        $"端点 {endPoint} 此前登记的对端是 {previous}，本次应答的是 {peerHex}，身份不一致。" +
+                        "可能存在中间人；也可能只是该端点换了机器、或动态 IP 被重新分配给了另一台机器" +
+                        "（DHCP 场景很常见，并非攻击）。确认无误可重试并加 --force 放行**本次**。");
+                }
+
+                logger.LogWarning(
+                    "/connect --force 放行端点身份冲突（一次性豁免，未改写已登记身份）: {EndPoint}, Previous={Previous}, Observed={Observed}",
+                    endPoint, previous, peerHex);
+                AddSystemMessage($"已用 --force 跳过端点身份冲突检查（此前 {previous} / 本次 {peerHex}）");
+            }
+            else if (verdict == EndpointIdentityVerdict.FirstContact)
+            {
+                // 措辞纪律：这里**绝不能**出现「已验证」「身份可信」这类字眼 ——
+                // 验签只证明「应答方持有它自己那把私钥」，不证明它就是你想找的那个人。
+                AddSystemMessage("注意: 该端点为首次接触，其身份未经带外验证（TOFU）。");
+                AddSystemMessage("      验签只能证明「应答方持有它自己那把私钥」，不能证明它就是你以为的那个人。");
+                AddSystemMessage("      请通过可信渠道核对下面的对端 NodeId（例如当面比对）。");
+            }
+            else
+            {
+                AddSystemMessage($"该端点身份与此前登记一致（{peerHex}）。");
+            }
+
             // 用响应中的对端临时公钥派生会话密钥，双方 ECDH 派生结果一致。
-            var sharedSecret = encryption.DeriveSharedSecret(ephemeral.PrivateKey, response.EphemeralPublicKey);
+            var sharedSecret = encryption.DeriveSharedSecret(
+                ephemeral.PrivateKey, helloResponse.Message.EphemeralPublicKey);
             var sessionKey = encryption.DeriveSessionKey(sharedSecret);
             keyStore.SetSessionKey(peerId, sessionKey);
 
@@ -592,12 +658,11 @@ public sealed class P2PChatTui(
             {
                 NodeId = peerId,
                 EndPoint = endPoint,
-                // 这里**能**拿到对端真实长期公钥：hello 响应是一条已通过 MessageRouter 验签的
-                // 签名信封，其 SenderPublicKey 被纳入 ECDSA 签名覆盖，且
-                // VerifyEnvelopeCore 已强制 NodeId.FromPublicKey(公钥) == SenderId —— 即公钥与身份已绑定。
+                // 这里**能**拿到对端真实长期公钥：hello 响应是一条已通过
+                // Core.Extensions.EnvelopeVerifier.Verify 验签的信封，其 SenderPublicKey 被纳入
+                // ECDSA 签名覆盖，且验签已强制 NodeId.FromPublicKey(公钥) == SenderId —— 公钥与身份已绑定。
                 // （历史上这里填的是**本机**公钥当「占位」，会让任何 NodeId.FromPublicKey(node.PublicKey)
                 //   算出来的都是我们的 NodeId，对端防冒名守卫在路由表/静态对端层形同虚设。）
-                // 取不到时才为 null，由 GroupChatService 在需要包装群密钥时主动握手取回。
                 PublicKey = peerPublicKey,
                 State = PeerState.Online
             });
@@ -625,6 +690,15 @@ public sealed class P2PChatTui(
             AddSystemMessage($"/connect 超时：{endPoint} 在 10s 内未回应 hello");
             logger.LogWarning("/connect 超时: {EndPoint}", endPoint);
         }
+        catch (HelloRejectedException ex)
+        {
+            // 显式失败。**绝不**静默回退到「不验证也接受」—— 那等于把漏洞原样留在原地，
+            // 而用户毫不知情，还以为自己连上了目标节点。
+            AddSystemMessage($"/connect 拒绝: {ex.Message}");
+            AddSystemMessage("未做任何登记：会话密钥与静态对端都未写入。");
+            logger.LogWarning("/connect 拒绝（对端身份无法验证）: {EndPoint}, Reason={Reason}",
+                endPoint, ex.Message);
+        }
         catch (Exception ex)
         {
             AddSystemMessage($"/connect 失败: {ex.Message}");
@@ -639,26 +713,86 @@ public sealed class P2PChatTui(
         }
     }
     /// <summary>
-    /// 沿给定 TCP 连接读取消息，直到拿到 <see cref="KeyExchangeMessage.IsResponse"/> = true 的应答，
-    /// 其他类型（理论上不应出现）静默丢弃并继续读取。
-    /// 镜像 <c>ChatService.ReadKeyExchangeResponseAsync</c> 的语义但只取本节点的 hello 响应。
+    /// hello 应答的对端身份 —— <b>全部</b>由公钥派生，不含任何对端可控的载荷字段。
+    /// </summary>
+    private sealed record HelloResponse(KeyExchangeMessage Message, NodeId PeerNodeId, byte[] PeerPublicKey);
+
+    /// <summary>
+    /// hello 应答被拒绝。独立于普通异常，以便 <c>/connect</c> 给出「拒绝」而非「失败」的
+    /// 明确提示 —— 验签失败是安全事件，必须让用户看见，绝不能与网络抖动混为一谈。
+    /// </summary>
+    private sealed class HelloRejectedException(string message) : Exception(message);
+
+    private enum EndpointIdentityVerdict
+    {
+        /// <summary>该端点此前没有已登记身份 —— 首次接触，TOFU。</summary>
+        FirstContact,
+
+        /// <summary>与此前登记的身份一致。</summary>
+        Matches,
+
+        /// <summary>与此前登记的身份不一致 —— 可能是中间人，也可能是端点换了机器 / DHCP 换 IP。</summary>
+        Conflicts
+    }
+
+    /// <summary>
+    /// 本地已知的「端点 → 身份」绑定。
     /// <para>
-    /// <b>⚠️ 信封格式只有一份实现</b>：必须用 <c>Core.Extensions.EnvelopeCodec</c>，
-    /// 绝不能在本文件里再抄一份解析器。历史事故：本文件曾自带一份「50 字节固定头直接切
-    /// Payload」的解析器副本，阶段 3.2 引入签名（公钥长度前缀 + 签名前缀）后没有同步更新，
-    /// 导致 <c>/connect &lt;ip:port&gt;</c> 盲连接的 hello 响应必然解析失败。
-    /// UI 层不引用 Chat 层，所以正确解法是把编解码收敛到 Core 依赖图的根，而不是再抄一份。
+    /// <b>来源只有一个：<see cref="IDhtService.GetAllKnownNodes"/> 里的节点表</b>
+    /// （静态对端登记表 + DHT 路由表）。这里刻意<b>不</b>去读联系人表（<c>contacts.json</c>）：
+    /// 联系人只存「用户自己写下的 NodeId + ip:port」，那是用户的<b>意图</b>而非「我们亲眼验过
+    /// 的身份」，把它当 pin 等于把用户的笔误升级成安全断言。
     /// </para>
     /// <para>
-    /// 返回值第二项是对端的<b>长期公钥</b>，取自该条已验签响应信封的
-    /// <c>MessageEnvelope.SenderPublicKey</c>。它被纳入 ECDSA 签名覆盖，且
-    /// <c>MessageRouter.VerifyEnvelopeCore</c> 已强制
-    /// <c>NodeId.FromPublicKey(公钥) == SenderId</c>，因此「公钥 ↔ 身份」的绑定是可信的。
-    /// 载荷里的 <c>message.SenderId</c> 是对端可控输入，<b>不能</b>用来推导身份。
+    /// 另外只取 <c>PublicKey</c> 非空的条目 —— 只有真正完成过一次 <c>/connect</c>
+    /// （或经 DHT 拿到公钥）的对端才会带着公钥登记，手工 <c>/add</c> 登记的对端公钥为 null，
+    /// 不能作为 pin。
     /// </para>
     /// </summary>
-    private async Task<(KeyExchangeMessage Message, byte[]? SenderPublicKey)> ReadHelloResponseAsync(
-        ITcpConnection connection, CancellationToken ct)
+    private IReadOnlyList<NodeInfo> KnownEndpointIdentities()
+        => dhtService.GetAllKnownNodes().Where(n => n.PublicKey is { Length: > 0 }).ToList();
+
+    private IReadOnlyList<NodeInfo> KnownEndpointIdentities(System.Net.IPEndPoint endPoint)
+        => KnownEndpointIdentities().Where(n => n.EndPoint.Equals(endPoint)).ToList();
+
+    private EndpointIdentityVerdict EvaluateEndpointIdentity(System.Net.IPEndPoint endPoint, NodeId observed)
+    {
+        var verdict = Core.Extensions.EnvelopeVerifier.EvaluatePeerIdentity(
+            KnownEndpointIdentities().Select(n => (n.EndPoint, n.NodeId)), endPoint, observed);
+
+        return verdict switch
+        {
+            Core.Extensions.EnvelopeVerifier.PeerIdentityVerdict.MatchesExistingPin
+                => EndpointIdentityVerdict.Matches,
+            Core.Extensions.EnvelopeVerifier.PeerIdentityVerdict.ConflictsWithExistingPin
+                => EndpointIdentityVerdict.Conflicts,
+            _ => EndpointIdentityVerdict.FirstContact
+        };
+    }
+
+    /// <summary>
+    /// 沿给定 TCP 连接读取消息，直到拿到 <see cref="KeyExchangeMessage.IsResponse"/> = true 的应答，
+    /// 其他类型（理论上不应出现）静默丢弃并继续读取。
+    /// <para>
+    /// <b>⚠️ 信封格式与验签都只有一份实现</b>：必须用 <c>Core.Extensions.EnvelopeCodec</c> 与
+    /// <c>Core.Extensions.EnvelopeVerifier</c>，绝不能在本文件里再抄一份。
+    /// 历史事故：本文件曾自带一份「50 字节固定头直接切 Payload」的解析器副本，
+    /// 阶段 3.2 引入签名后没有同步更新，导致 <c>/connect &lt;ip:port&gt;</c> 解析必然失败；
+    /// 编解码随后被收敛到 Core。而<b>验签那份直到本轮才被收敛</b> —— 在那之前本方法
+    /// 只 Deserialize 就直接使用，<b>完全不验签</b>，于是任意能应答的主机都会被无条件信任。
+    /// </para>
+    /// <para>
+    /// <b>本方法证明什么 / 不证明什么</b>：它保证「应答方持有它出示的那把公钥对应的私钥」
+    /// 且「公钥派生出的 NodeId 等于信封 SenderId」。它<b>不</b>保证对方是用户想找的那个人 ——
+    /// 首次接触未知端点时这在信息论上不可能做到。调用方必须据此如实提示用户（TOFU）。
+    /// </para>
+    /// </summary>
+    /// <param name="expectedConversationId">
+    /// 本次 hello 发出时使用的一次性关联标识。响应必须原样回显它。
+    /// </param>
+    /// <param name="ct">取消标记。</param>
+    private async Task<HelloResponse> ReadHelloResponseAsync(
+        ITcpConnection connection, string expectedConversationId, CancellationToken ct)
     {
         var serializer = new MessagePackSerializer();
         while (true)
@@ -667,8 +801,56 @@ public sealed class P2PChatTui(
             var envelope = EnvelopeCodec.Deserialize(raw);
             if (envelope.MessageType != MessageType.KeyExchange) continue;
             var msg = serializer.Deserialize<Message>(envelope.Payload);
-            if (msg is KeyExchangeMessage { IsResponse: true } response)
-                return (response, envelope.SenderPublicKey);
+            if (msg is not KeyExchangeMessage { IsResponse: true } response) continue;
+
+            // ────────────────────────────────────────────────────────────────────
+            // 判据 ①：ConversationId 回显校验（**仅本路径需要**，见下方说明）
+            //
+            // 为什么只有 /connect 需要：hello 的 ConversationId 是每次调用新生成的
+            // 「一次性关联标识」；KeyExchangeHandler 构造响应时原样回显（见其源码）。
+            // 因此攻击者录下的**旧**响应回显的是**上一次**别的节点的那串值，对不上。
+            // 而正常消息路由的 ConversationId 是恒定的会话键，回显它不提供任何额外保证
+            // （那边由 MessageId 去重覆盖）—— 不要去 ChatService.PerformKeyExchangeAsync
+            // 加同样的校验，那只会制造一种「已完备」的错觉。
+            //
+            // 它挡的是**跨受害者重放**：重放防护是本地状态，受害节点从未见过那条
+            // MessageId，放行；而攻击者知道自己的临时私钥，可解出受害者派生的会话密钥。
+            // ────────────────────────────────────────────────────────────────────
+            if (!string.Equals(response.ConversationId, expectedConversationId, StringComparison.Ordinal))
+            {
+                throw new HelloRejectedException(
+                    $"hello 应答的关联标识不匹配（期望 {expectedConversationId}，实际 {response.ConversationId}）" +
+                    "——疑似重放了一条旧的合法应答。");
+            }
+
+            // ────────────────────────────────────────────────────────────────────
+            // 判据 ②：ECDSA 验签。
+            //
+            // ⚠️ **顺序不变量（改动本文件时务必保持）**：
+            // 本方法必须在返回**之前**完成验签，调用方才能安全地使用
+            // 对端公钥 / 对端身份。绝不能把验签下移到「登记静态对端之后」或
+            // 任何其它使用点之后 —— `PublicKey = peerPublicKey` 正是路由表/静态对端层
+            // 做 `NodeId.FromPublicKey(node.PublicKey)` 防冒名判定的依据；
+            // 一条**未验签**的公钥能让那一层守卫直接失效（不是变弱，是被绕过）。
+            // 同样，身份必须从公钥**派生**，绝不能用载荷里的 SenderId 去构造 NodeId ——
+            // 载荷的 SenderId 是对端可控输入。（此处刻意不写出该表达式字面量：
+            // 源文本结构守卫会把它当成「仍在使用」的证据而产生误报。）
+            //
+            // 本函数**证明**：应答由持有该私钥的一方签发，且其声明的身份与公钥自洽。
+            // 本函数**不证明**：对端是谁、对端是否可信；也不证明这条消息不是重放
+            // （那由 IReplayGuard 负责，不过 /connect 这条路径走不到路由器，
+            //   故上面用判据 ① 以无状态方式覆盖）。
+            // ────────────────────────────────────────────────────────────────────
+            if (!Core.Extensions.EnvelopeVerifier.Verify(envelope, encryption, out var failureReason))
+            {
+                throw new HelloRejectedException($"对端身份无法验证: {failureReason}");
+            }
+
+            // 验签已保证 SenderPublicKey 非空且派生得出 SenderId。
+            var peerPublicKey = envelope.SenderPublicKey!;
+            var peerNodeId = NodeId.FromPublicKey(peerPublicKey);
+
+            return new HelloResponse(response, peerNodeId, peerPublicKey);
         }
     }
     private async Task HandleTransferAsync(string transferId, bool accept)
