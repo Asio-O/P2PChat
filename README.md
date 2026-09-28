@@ -80,9 +80,11 @@ dotnet publish src/P2PChat.App/P2PChat.App.csproj -c Release
 dotnet test P2PChat.slnx
 ```
 
-测试分层：`Core`（序列化与 NodeId、端点字面量解析）、`Crypto`（加解密与签名）、`Networking`（Bencode/DHT 路由表、真实 KRPC 发现闭环、UPnP 客户端）、`Chat`（重放防护的消息路由、会话与群聊服务）、`Integration`（多态消息编解码往返、双节点 TCP 加密私聊内容一致性、群组邀请与群消息、**消息签名与身份绑定**、**重放拦截**、文件分块完整性、KBucket 行为）。
+测试分层：`Core`（序列化与 NodeId、端点字面量解析、信封编解码）、`Crypto`（加解密与签名）、`Networking`（Bencode/DHT 路由表、真实 KRPC 发现闭环、引导耗时、UPnP 客户端）、`Chat`（信封验签与端点身份连续性、重放防护、消息路由、会话与群聊服务）、`Integration`（多态消息编解码往返、双节点 TCP 加密私聊内容一致性、群组邀请与群消息、**消息签名与身份绑定**、**重放拦截**、**伪造 hello 应答被拒**、**收到的事件确实抵达 UI**、文件分块完整性、KBucket 行为）。
 
-当前规模：**以 `dotnet test` 的实际输出为准**（最近一次收口记录为 331 通过 / 0 失败，此后又有大批新用例加入）。数字会随测试增减变化，请不要把任何历史数字当作当前值。
+最近一次实测：**359 个用例全部通过 / 0 失败**（`dotnet build` 0 错 0 警，Native-AOT 发布 0 条 IL/AOT 警告，端到端脚本 `PASS=41 / FAIL=0 / SKIP=0`）。
+
+> ⚠️ 这个数字**极易过期** —— 请以你本地 `dotnet test` 的实际输出为准，不要把上面这个值当作当前状态。
 
 双进程端到端验证脚本（真实拉起两个节点实例，校验 DHT 发现、端口绑定、数据目录隔离、日志健康度）：
 

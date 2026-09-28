@@ -808,7 +808,7 @@ CompositeResolver.Create(
 | `System.Text.Json` 反射序列化 | 运行时不支持 | `JsonContext` 源生成器（`JsonSerializerIsReflectionEnabledByDefault=false`） |
 | `MakeGenericType` / `Activator.CreateInstance` 热路径 | 裁剪 + 动态代码 | 显式泛型/工厂 |
 
-**验证方式**：`SerializerAotRoundTripTests.cs` 保证序列化往返在 AOT 语义下成立；`dotnet publish` 的 **IL trim/AOT 警告必须为 0**。
+**验证方式**：`SerializerAotRoundTripTests.cs` 保证序列化往返在 AOT 语义下成立；`dotnet publish` 的 **IL trim/AOT 警告必须为 0**（最近一次实测 **0 条**，见 §6 门禁表）。
 
 > 🚨 **但 `dotnet build` 全绿 ≠ 能跑 —— DI 缺陷是构建期看不见的。**
 >
@@ -861,9 +861,11 @@ pwsh -NoProfile -File scripts/e2e-verify.ps1
 |---|---|---|
 | `dotnet build` 0 错 0 警 | 编译、AOT 静态警告 | ❌ **抓不到任何 DI 缺陷**（DI 解析是运行期的） |
 | `dotnet test` 全绿 | 单元/集成逻辑 | ❌ 抓不到「同一服务被注册成两个实例」这类缺陷（单测读的是组件自己的通道） |
-| **实际跑一次进程** | 真实 DI 图能否解析、服务是否同一实例 | —— 唯一能验证 DI 的手段 |
+| `dotnet publish` 0 条 IL/AOT 警告 | Native-AOT 裁剪/动态代码 | ❌ 抓不到运行期行为缺陷 |
+| **实际跑一次进程**（`e2e-verify.ps1` / `P2PCHAT_SELFTEST=1`） | 真实 DI 图能否解析、服务是否同一实例、真实网络往返 | —— 唯一能验证 DI 与端到端行为的手段 |
 
 > 🚨 **「构建全绿」曾真实地放过一次阻断级缺陷。** 改 DI（新增注册、改生命周期、改注册顺序）之后，**必须** `dotnet run --project src/P2PChat.App` 或 `P2PCHAT_SELFTEST=1` 跑一次，确认能起来并打印自检块。详见 §4.3 末尾。
+> **四道门禁里前三道都能骗人**（前两道完全查不出 DI 问题，第三道查不出运行期行为）。最近一次四道全绿的实测数字见 **§6 门禁表** —— 那里同样带「引用前请重跑」的过期警告。
 
 ### 5.3 配置项
 
@@ -944,8 +946,17 @@ $env:P2PCHAT_P2PChat__TcpPort="20091"
 | `P2PChat.Chat.Tests` | `ChatServiceTests`、`ContactServiceTests`、`GroupChatServiceTests`、`MessageHandlerTests`、`MessageRouterTests`（信封往返 / 连接池复用）、**`EnvelopeVerifierTests`**（验签 + 端点身份连续性）、**`ReplayGuardTests`**（重放防护，见 §7 Testing） |
 | `P2PChat.Integration.Tests` | 多节点夹具（`Support/NodeHarness.cs` + `Support/TestDoubles.cs`）驱动的：`ChatEventDeliveryTests`（B3 跨组件守卫）、`CryptoRoundTripTests`、`DhtRoutingTableTests`、`FileTransferIntegrityTests`、`GroupChatIntegrationTests`、**`HelloResponseVerificationTests`**（伪造 hello 应答被拒）、`IdentityAndEndpointTests`、`KnownDefectsTests`、`LongTermPublicKeyTests`、`MessageSigningTests`、`MessageUnionSerializationTests`、`PlainModeInputTests`、`ReplayProtectionTests`、`TwoNodeChatIntegrationTests` |
 
-**当前规模**：**门禁数字以 `dotnet test` 的实际输出为准 —— 本页不预填。**
-⚠️ 上一次收口记录为 **331 通过 / 0 失败**（`dotnet build` 0 错 0 警）；此后 `/connect` 身份校验与事件流收敛又新增了大量用例，**引用前必须重跑**。数字看起来权威但极易过期，这是本项目反复踩到的坑。
+**最近一次实测门禁（2026-09-28，本轮收口值）**：
+
+| 指标 | 结果 |
+|---|---|
+| `dotnet test P2PChat.slnx` | **359 通过 / 0 失败 / 0 跳过** —— Core 52 / Crypto 8 / Chat 121 / Integration 155 / Networking 23 |
+| `dotnet build` | 0 错 0 警 |
+| `dotnet publish`（Native-AOT） | IL trim / AOT 警告 **0 条**（IL2026 / IL2070 / IL2072 / IL2075 / IL3050 / IL3053） |
+| `scripts/e2e-verify.ps1` | `PASS=41 / FAIL=0 / SKIP=0`，退出码 0 |
+
+> ⚠️ **引用前请重跑 —— 数字极易过期。** 上一轮收口是 331，本轮因 `/connect` 身份校验与事件流收敛涨到 359。**任何看起来权威的历史数字都不等于当前值**；这是本项目反复踩到的坑（「数字看起来权威但已过期」）。
+> 上表中 `dotnet test` 一行是**本人复跑核对过的**；`build` / `publish` / `e2e` 三行取自本轮 Lead 的实测记录（`e2e` 全流程约 10 分钟，未由文档侧复跑）。
 
 **测试栈**：xUnit 2.9.3 + Moq 4.20.72 + Shouldly 4.3.0 + coverlet.collector 6.0.4 + Microsoft.NET.Test.Sdk 17.13.0
 
