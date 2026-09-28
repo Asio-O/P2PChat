@@ -67,6 +67,11 @@ public class Program
         var preferredTcpPort = chatConfig.GetValue<int>("TcpPort", 0);
         var kBucketSize = chatConfig.GetValue<int>("KBucketSize", 20);
         var alpha = chatConfig.GetValue<int>("Alpha", 3);
+        // 入站重放防护的时间窗（REPAIR-PLAN 阶段 2.3）。<= 0 是「关闭时间窗」的逃生阀，
+        // 供时钟严重偏移的机器自救 —— 但关闭必须是**显式**的，启动时会 LogWarning 并在
+        // 自检块显示「已关闭」，不允许它只悄悄躺在配置文件里。
+        // 这里只做解析与钳制，TimeSpan 的换算放在下面 —— 配置写错不能让进程起不来。
+        var replayMaxAgeSeconds = chatConfig.GetValue<double>("ReplayMaxAgeSeconds", 3600);
         var bootstrapNodes = chatConfig.GetSection("BootstrapNodes")
             .Get<string[]>() ?? [];
 
@@ -144,6 +149,29 @@ public class Program
             logger.LogWarning("UPnP 不可用 —— 本机可能仅对同网段/已有连接可达；公网对端可通过 /add <ip:port> 或 /connect <ip:port> 手工接入");
         }
 
+        // 入站重放防护：把 P2PChat:ReplayMaxAgeSeconds 换算成 TimeSpan。
+        // 钳制上界，避免一个手滑的巨大值（例如 1e18）让 TimeSpan.FromSeconds 抛
+        // OverflowException 把整个启动干掉 —— 配置写错应该降级，不该崩进程。
+        var replayMaxAge = replayMaxAgeSeconds switch
+        {
+            <= 0 => TimeSpan.Zero,                                              // 显式关闭时间窗（逃生阀）
+            _ => TimeSpan.FromSeconds(Math.Min(replayMaxAgeSeconds, TimeSpan.MaxValue.TotalSeconds))
+        };
+        if (replayMaxAge > TimeSpan.Zero)
+        {
+            logger.LogInformation("重放防护:   已启用（最大消息年龄 {MaxAge}）", ReplayGuardStatus.FormatAge(replayMaxAge));
+        }
+        else
+        {
+            // 「防护已关」不能只存在于配置文件里：必须显式告警，否则用户无从得知
+            // 捕获的旧信封可以无限重放（MessageId 去重仍在，但窗口内不再拦）。
+            logger.LogWarning(
+                "重放防护已关闭 —— P2PChat:ReplayMaxAgeSeconds={Seconds}（<=0 表示关闭时间窗）；" +
+                "超过最大消息年龄的旧信封将被接受，捕获的包可被反复重放。" +
+                "仅在两端时钟严重偏移、否则全网互拒时才应这样配置。",
+                replayMaxAgeSeconds);
+        }
+
         // 解析引导节点 (支持域名和IP)
         var bootstrapEndpoints = new List<IPEndPoint>();
         foreach (var ep in bootstrapNodes)
@@ -194,6 +222,13 @@ public class Program
         });
 
         // Chat层
+        // IReplayGuard 必须在 IMessageRouter 之前注册（MessageRouter 的 replayGuard 形参是必填的）。
+        // 这里用 AddSingleton 而非 TryAddSingleton：本条携带 P2PChat:ReplayMaxAgeSeconds 的解析结果，
+        // 是**权威**注册；即便将来有人改成调用 AddP2PChatChat()，它内部那条 1 小时默认值的
+        // TryAddSingleton 因为本条已存在而不会生效，配置永远不会「悄悄失效回默认值」。
+        services.AddSingleton<IReplayGuard>(sp => new MessageReplayGuard(
+            sp.GetRequiredService<ILogger<MessageReplayGuard>>(),
+            replayMaxAge));
         services.AddSingleton<IMessageRouter, MessageRouter>();
         services.AddSingleton<IGroupMetadataStore, FileBackedGroupMetadataStore>();
         services.AddSingleton<PrivateMessageHandler>();
@@ -201,7 +236,21 @@ public class Program
         services.AddSingleton<KeyExchangeHandler>();
         services.AddSingleton<GroupInviteHandler>();
         services.AddSingleton<GroupNotifyHandler>();
-        services.AddSingleton<IChatService, ChatService>();
+        // ⚠️ ChatService 必须以【单例 + 接口转发】的方式注册，且 IChatService 与
+        // IChatEventPublisher 必须解析到**同一个实例**。
+        //
+        // 原因：handler 把收到的事件投递进 ChatService 持有的那一条 Channel，
+        // 而 TUI（`P2PChatTui.ProcessIncomingMessagesAsync`）读的是 IChatService.OnMessageReceived。
+        // 两者必须是**同一条通道**。若写成两个独立的注册，DI 会建出两个 ChatService 实例 ——
+        // 症状是「消息收得到、界面不显示」，且 `dotnet build` 完全不报错（DI 解析是运行期的），
+        // 单元测试也会全绿（它们读的是 handler 自己的通道）。这正是本缺陷能长期潜伏的原因。
+        //
+        // 另注：本文件把 Chat 层注册**内联**了一份，并未调用 `AddP2PChatChat()`。
+        // 所以在 `ChatServiceCollectionExtensions` 里新增的任何注册都不会在真实 App 生效 ——
+        // 改这里时必须同步核对那个扩展方法，两处不能只改一处。
+        services.AddSingleton<ChatService>();
+        services.AddSingleton<IChatService>(sp => sp.GetRequiredService<ChatService>());
+        services.AddSingleton<IChatEventPublisher>(sp => sp.GetRequiredService<ChatService>());
         services.AddSingleton<IGroupChatService, GroupChatService>();
         services.AddSingleton<IContactService, ContactService>();
 
@@ -210,6 +259,10 @@ public class Program
             P2PChat.FileTransfer.Services.FileTransferService>();
 
         // UI层
+        // 自检块要显示「重放防护: 已启用/已关闭」。UI 只引用 Core，拿不到 Chat 层的
+        // MessageReplayGuard，因此在装配处把状态**值**交给它（ReplayGuardStatus），
+        // 而不是让 TUI 去问 IReplayGuard（该接口是安全边界，只有 TryAccept）。
+        services.AddSingleton(new ReplayGuardStatus(replayMaxAge > TimeSpan.Zero, replayMaxAge));
         services.AddSingleton<P2PChatTui>();
 
         // 6. 构建最终提供器

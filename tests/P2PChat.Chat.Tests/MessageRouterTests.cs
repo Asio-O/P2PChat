@@ -44,7 +44,7 @@ public class MessageRouterTests
         // 传输层每次拨号都返回一条全新连接，贴近真实 TCP 语义
         transport.ConnectionFactory = ep => new FakeTcpConnection(ep);
         var peer = TestNodes.LegacyPublicKeyNode(port: 47001);
-        var router = new MessageRouter(transport, Wire, crypto, keyStore, NullLogger<MessageRouter>.Instance);
+        var router = TestRouters.Create(transport, Wire, crypto, keyStore);
         return new Harness(router, transport, keyStore, crypto, identity, identity.NodeId, peer);
     }
 
@@ -199,7 +199,7 @@ public class MessageRouterTests
             EndPoint = new IPEndPoint(IPAddress.Parse("203.0.113.7"), 51234),
             PublicKey = new byte[32]
         };
-        var router = new MessageRouter(transport.Object, Wire, crypto, keyStore, NullLogger<MessageRouter>.Instance);
+        var router = TestRouters.Create(transport.Object, Wire, crypto, keyStore);
 
         await router.SendAsync(peer, new TextMessage
         {
@@ -427,8 +427,9 @@ public class MessageRouterTests
         var sessionKey = h.Crypto.GenerateRandomKey();
         h.KeyStore.SetSessionKey(peer.NodeId, sessionKey);
 
+        var events = new CapturingChatEventPublisher();
         var handler = new PrivateMessageHandler(
-            h.Crypto, h.KeyStore, NullLogger<PrivateMessageHandler>.Instance);
+            h.Crypto, h.KeyStore, events, NullLogger<PrivateMessageHandler>.Instance);
         h.Router.RegisterHandler(handler);
 
         const string plain = "经路由投递的私聊";
@@ -443,7 +444,7 @@ public class MessageRouterTests
 
         await h.Router.RouteIncomingAsync(Sign(h, peer, MessageType.PrivateText, text), new FakeTcpConnection());
 
-        var evt = await AsyncStream.FirstAsync(handler.OnMessageReceived);
+        var evt = await AsyncStream.FirstAsync(events.Events);
         evt.Content.ShouldBe(plain);
         evt.SenderId.ShouldBe(peer.NodeId);
         evt.IsGroup.ShouldBeFalse();
@@ -460,8 +461,9 @@ public class MessageRouterTests
         const string groupId = "g-1234";
         h.KeyStore.SetGroupKey(groupId, groupKey);
 
+        var events = new CapturingChatEventPublisher();
         var handler = new GroupMessageHandler(
-            h.Crypto, h.KeyStore, NullLogger<GroupMessageHandler>.Instance);
+            h.Crypto, h.KeyStore, events, NullLogger<GroupMessageHandler>.Instance);
         h.Router.RegisterHandler(handler);
 
         // 私聊报文：信封类型是 PrivateText，而这里只注册了 GroupText 处理器
@@ -485,7 +487,7 @@ public class MessageRouterTests
         await h.Router.RouteIncomingAsync(
             Sign(h, peer, MessageType.GroupText, groupText), new FakeTcpConnection());
 
-        var evt = await AsyncStream.FirstAsync(handler.OnMessageReceived);
+        var evt = await AsyncStream.FirstAsync(events.Events);
         evt.Content.ShouldBe("群消息", "只有 GroupText 才应进入群消息处理器");
         evt.IsGroup.ShouldBeTrue();
         evt.ConversationId.ShouldBe(groupId);

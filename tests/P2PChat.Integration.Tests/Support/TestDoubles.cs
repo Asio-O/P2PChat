@@ -163,6 +163,54 @@ public sealed class RecordingMessageRouter : IMessageRouter
     public Task CloseConnectionAsync(byte[] nodeId) => Task.CompletedTask;
 }
 
+/// <summary>
+/// 捕获型聊天事件发布器 —— 直接单测消息 handler 时用（不经 DI、不经 ChatService）。
+/// <para>
+/// 存在的意义：handler 已不再持有自己的 <c>Channel&lt;ChatMessageEvent&gt;</c>，
+/// 输出统一走 <see cref="IChatEventPublisher"/>。单测 handler 就必须提供一个发布器替身，
+/// 并在替身上断言 —— 这也把「handler 必须通过发布器投递」变成了编译期事实。
+/// </para>
+/// </summary>
+public sealed class CapturingChatEventPublisher : IChatEventPublisher
+{
+    private readonly System.Threading.Channels.Channel<ChatMessageEvent> _channel =
+        System.Threading.Channels.Channel.CreateUnbounded<ChatMessageEvent>();
+
+    public IAsyncEnumerable<ChatMessageEvent> Events => _channel.Reader.ReadAllAsync();
+
+    /// <summary>已投递的事件（快照），用于「没有事件」这类否定断言。</summary>
+    public IReadOnlyList<ChatMessageEvent> Published
+    {
+        get { lock (_published) return _published.ToList(); }
+    }
+
+    private readonly List<ChatMessageEvent> _published = [];
+
+    public Task PublishAsync(ChatMessageEvent chatEvent, CancellationToken ct = default)
+    {
+        lock (_published) _published.Add(chatEvent);
+        return _channel.Writer.WriteAsync(chatEvent, ct).AsTask();
+    }
+}
+
+/// <summary>
+/// IAsyncEnumerable 的同步过滤helper（测试项目不引入 System.Linq.Async，且不得用反射）。
+/// </summary>
+public static class AsyncEnumerableFilter
+{
+    public static async IAsyncEnumerable<T> Where<T>(
+        IAsyncEnumerable<T> source,
+        Func<T, bool> predicate,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await foreach (var item in source.WithCancellation(ct).ConfigureAwait(false))
+        {
+            if (predicate(item))
+                yield return item;
+        }
+    }
+}
+
 /// <summary>轮询等待帮助器：在超时内等待条件成立，返回是否成功。</summary>
 public static class Wait
 {

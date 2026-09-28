@@ -521,6 +521,39 @@ try {
         }
         Write-Host ("    -> 明文往返耗时 {0}s  是否在 nodeB2 日志/输出中出现: {1}" -f [math]::Round($swRound.Elapsed.TotalSeconds,1), $plaintextSeen) -ForegroundColor $(if ($plaintextSeen) { 'Green' } else { 'Red' })
 
+        # ---- 入站重放防护：负向对照（二次发送同一明文） --------------------------
+        # 目的：给「入站重放防护」一条能发现**误杀正常消息**的断言。
+        #
+        # ⚠️ 语义澄清（不要误读成「重放」）：
+        #   这次注入的 `/msg nodeB <同一明文>` 会走 ChatService.SendPrivateMessageAsync
+        #   新建一个 TextMessage。`Message.MessageId` 的默认初始化是
+        #   `= Guid.NewGuid()`（src/P2PChat.Core/Models/Message.cs:26），
+        #   `Timestamp` 同理为 `DateTimeOffset.UtcNow`，而该方法**不覆盖**这两个字段
+        #   （src/P2PChat.Chat/Services/ChatService.cs:82-88）。
+        #   ⇒ 第二次注入产生的是一条**全新的合法消息**（新 MessageId + 新时间戳），
+        #     **不是重放**。重放防护**应当放行**，nodeB2 **应当**出现第二条事件行。
+        #   真正的「重放」= 重发**同一条信封**（同 MessageId），那只能在 TCP 层构造，
+        #   属于 task-12 集成测试范畴；stdin 注入无法触发。
+        #
+        # 等待信号用 Serilog 的 `私聊消息已处理: {Sender} -> {Text}`
+        # （src/P2PChat.Chat/Handlers/PrivateMessageHandler.cs:84，[DBG] 级，
+        #   每条被 handler 处理的消息恰好一行），而不是 stdout 事件行 ——
+        #   stdout 要等进程退出后 ReadToEndAsync 才能整体读到，那时已经太晚。
+        $cmdDup = "/msg nodeB $plaintext"
+        foreach ($c in $cmdDup.ToCharArray()) {
+            $nodeA2.Proc.StandardInput.Write($c)
+            Start-Sleep -Milliseconds 30
+        }
+        $nodeA2.Proc.StandardInput.Write("`n")
+        $nodeA2.Proc.StandardInput.Flush()
+
+        $handledRe = '私聊消息已处理:[^\r\n]*' + [regex]::Escape($plaintext)
+        $swDup = [System.Diagnostics.Stopwatch]::StartNew()
+        $duplicateAccepted = Wait-Until -TimeoutSeconds 25 -IntervalMs 500 -Condition {
+            [regex]::Matches((Read-NodeLog -DataDir $dataDirB2), $handledRe).Count -ge 2
+        }
+        Write-Host ("    -> 二次发送(新 MessageId)后 nodeB2 已处理消息数>=2: {0}（耗时 {1}s）" -f $duplicateAccepted, [math]::Round($swDup.Elapsed.TotalSeconds,1)) -ForegroundColor $(if ($duplicateAccepted) { 'Green' } else { 'Red' })
+
         # 关掉 Phase 2 实例（让 stdout/stderr 关闭以便 Get-NodeOutput 完成）
         foreach ($n in @($nodeA2, $nodeB2)) {
             try {
@@ -561,6 +594,25 @@ try {
             $(if ($a2NotOutgoing.Count -eq 0) { 'PASS' } else { 'FAIL' }) `
             $(if ($a2EventLines.Count -eq 0) { 'nodeA2 无聊天事件行含该明文' } else { "事件行 $($a2EventLines.Count) 行，其中非出站 $($a2NotOutgoing.Count) 行"; $a2EventLines | Select-Object -First 3 | ForEach-Object { "  $_" } })
 
+        # ---- (A33/A34) 入站重放防护的可观测断言 --------------------------------
+        # 为什么**不做**「重放同一条消息 → 断言该明文只出现 1 行」：
+        #   1) MessageId 每次都是全新 Guid（Message.cs:26），二次注入**不是重放**，
+        #      防护应当放行 —— 「恰好 1 行」会 FAIL，而 FAIL 恰恰说明产品是对的；
+        #   2) 「行数」本身不可靠：单条消息已让该明文在 Combined 里出现 **>=2 行**
+        #      （Serilog `[DBG] 私聊消息已处理: … -> 明文` + plain 模式 stdout 事件行）。
+        #   故改为断言**可观测且不恒真**的性质。
+        $b2EventLines = @($outB2.Combined -split "`r?`n" |
+            Where-Object { $_ -match [regex]::Escape($plaintext) -and $_ -match $eventLineRe })
+        $b2HandledLines = @($outB2.Combined -split "`r?`n" |
+            Where-Object { $_ -match [regex]::Escape($plaintext) -and $_ -match '私聊消息已处理' })
+        $b2EventEv = "事件行=$($b2EventLines.Count) 私聊消息已处理行=$($b2HandledLines.Count) 在线等待确认=$duplicateAccepted"
+        if ($b2EventLines.Count -gt 0) { $b2EventEv += '  样本: ' + (($b2EventLines | Select-Object -First 2) -join ' || ') }
+        Add-Result 'A33' 'Phase 2：nodeB2 存在含该明文的聊天事件行（正常消息穿过 验签→重放防护→handler→inbox 全链路，未被误杀）' `
+            $(if ($b2EventLines.Count -ge 1) { 'PASS' } else { 'FAIL' }) $b2EventEv
+        Add-Result 'A34' 'Phase 2：重复发送同一明文（新 MessageId）未被重放防护误拦截 —— 负向对照（重放防护不误杀合法二次发送）' `
+            $(if ($b2EventLines.Count -ge 2) { 'PASS' } else { 'FAIL' }) `
+            "期望事件行>=2，实际=$($b2EventLines.Count)；$b2EventEv"
+
         # 收集 Phase 2 关键日志供末尾摘要使用
         $outA.Combined += "`n" + $outA2.Combined
         $outB.Combined += "`n" + $outB2.Combined
@@ -591,7 +643,7 @@ try {
     Write-Host "==============================================" -ForegroundColor Cyan
     Write-Host " 原始日志关键行" -ForegroundColor Cyan
     Write-Host "==============================================" -ForegroundColor Cyan
-    $keyPattern = '密钥存储目录|UDP传输绑定到|TCP监听已启动|节点ID|实际端口|引导节点|PING 引导节点|引导完成|路由表|注册消息处理器|被占用|自检|ERR\]|WRN\]|FTL\]|CRT\]|致命错误'
+    $keyPattern = '密钥存储目录|UDP传输绑定到|TCP监听已启动|节点ID|实际端口|引导节点|PING 引导节点|引导完成|路由表|注册消息处理器|被占用|重放防护|自检|ERR\]|WRN\]|FTL\]|CRT\]|致命错误'
     foreach ($n in @(@{ N = 'nodeA'; O = $outA; D = $dataDirA }, @{ N = 'nodeB'; O = $outB; D = $dataDirB })) {
         Write-Host ""
         Write-Host "--- $($n.N) (data=$($n.D)) ---" -ForegroundColor Yellow

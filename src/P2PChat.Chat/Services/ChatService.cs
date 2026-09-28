@@ -13,8 +13,14 @@ namespace P2PChat.Chat.Services;
 
 /// <summary>
 /// 聊天服务 — 私聊消息收发
+/// <para>
+/// 同时是整条聊天事件流的<b>唯一持有者与唯一出口</b>：出站消息的本地回显写进
+/// <see cref="_messageChannel"/>，入站消息由 <c>PrivateMessageHandler</c> /
+/// <c>GroupMessageHandler</c> 经 <see cref="IChatEventPublisher"/> 写进**同一个**通道。
+/// 见 REPAIR-PLAN B3 —— 这两个写入口此前各自持有私有通道，导致「收到的消息永远不显示」。
+/// </para>
 /// </summary>
-public class ChatService : IChatService
+public class ChatService : IChatService, IChatEventPublisher
 {
     private readonly IDhtService _dht;
     private readonly IMessageRouter _router;
@@ -111,10 +117,18 @@ public class ChatService : IChatService
     }
 
     /// <summary>
-    /// 发布收到的消息到事件流 (供Handler调用)
+    /// 发布聊天事件到事件流。
+    /// <para>
+    /// 这是 <see cref="IChatEventPublisher"/> 的唯一实现点，也是入站消息抵达 UI 的**唯一**路径。
+    /// 此前本方法在 <c>src/**</c> 里零调用者 —— handler 把事件写进了自己的私有通道，
+    /// 而 UI 读的是这里，于是「收到」与「看到」之间没有任何连线（REPAIR-PLAN B3）。
+    /// 现在 <c>PrivateMessageHandler</c> / <c>GroupMessageHandler</c> 都注入
+    /// <see cref="IChatEventPublisher"/> 并调用本方法。
+    /// </para>
     /// </summary>
-    public async Task PublishMessageAsync(ChatMessageEvent chatEvent, CancellationToken ct = default)
+    public async Task PublishAsync(ChatMessageEvent chatEvent, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(chatEvent);
         await _messageChannel.Writer.WriteAsync(chatEvent, ct);
     }
 

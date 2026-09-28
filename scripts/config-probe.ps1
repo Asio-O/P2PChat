@@ -193,6 +193,24 @@ $scenarios = @(
             'P2PCHAT_DATA_DIR' = (Join-Path $WorkRoot 'E6-custom-data')
         }
         Args  = @()
+    },
+    # E7/E8：入站重放防护的配置项可观测性。
+    # 这是 `P2PChat:ReplayMaxAgeSeconds` **真正生效**的证据 ——
+    # 没有它，一个写错名字 / 拼错的配置键也能「看起来有默认值」而永远无人发现：
+    # 两种情形下产品都只显示默认值，只有显式设为 0 能把「已关闭」暴露出来。
+    @{
+        Name  = 'E7-replay-guard-disabled'
+        Note  = 'P2PCHAT_P2PChat__ReplayMaxAgeSeconds=0 → 关闭入站重放防护的时间窗（自检块应显示「重放防护: 已关闭」）'
+        Env   = @{
+            'P2PCHAT_P2PChat__ReplayMaxAgeSeconds' = '0'
+        }
+        Args  = @()
+    },
+    @{
+        Name  = 'E8-replay-guard-default'
+        Note  = '不设置 ReplayMaxAgeSeconds → 默认启用（自检块应显示「重放防护: 已启用」）'
+        Env   = @{}
+        Args  = @()
     }
 )
 
@@ -210,6 +228,10 @@ foreach ($s in $scenarios) {
     $ping = Get-Field -Text $r.Combined -Pattern 'PING 引导节点: (\S+)'
     $udpBusy = Get-Field -Text $r.Combined -Pattern 'UDP端口 (\d+) 被占用'
     $tcpBusy = Get-Field -Text $r.Combined -Pattern 'TCP端口 (\d+) 被占用'
+    # 自检块里的「重放防护: 已启用 / 已关闭」。只认 `重放防护:` 这个**标签+冒号**形式，
+    # 这是自检块的行首标签格式；启动日志里的散文式告警（如「入站重放防护已关闭…」）
+    # 没有冒号，不会被误当成自检结论。
+    $replayGuard = Get-Field -Text $r.Combined -Pattern '重放防护:\s*(已启用|已关闭)'
     $attemptedUdp = if ($udpBusy -ne '<未出现>') { $udpBusy } else { $udp }
     $attemptedTcp = if ($tcpBusy -ne '<未出现>') { $tcpBusy } else { $tcp }
     $crit = [regex]::Matches($r.Combined, '\[(FTL|CRT)\]\s|P2PChat 致命错误|Unhandled exception').Count
@@ -231,6 +253,7 @@ foreach ($s in $scenarios) {
         BootStrap    = $boot
         StoreDir     = $storeDir
         Ping         = $ping
+        ReplayGuard  = $replayGuard
         Critical     = $crit
         Unhandled    = $unhandled
         Dir          = $r.Dir
@@ -243,6 +266,7 @@ foreach ($s in $scenarios) {
     Write-Host ("    引导: {0}" -f $obj.BootStrap)
     Write-Host ("    密钥存储目录: {0}" -f $obj.StoreDir)
     Write-Host ("    PING: {0} | Critical={1} Unhandled={2} 端口冲突={3}" -f $obj.Ping, $obj.Critical, $obj.Unhandled, $obj.PortBusyWarn)
+    Write-Host ("    重放防护: {0}" -f $obj.ReplayGuard)
     Write-Host ""
 }
 
@@ -253,6 +277,8 @@ $e3 = $results | Where-Object Scenario -eq 'E3-cmdline-colon'
 $e4 = $results | Where-Object Scenario -eq 'E4-configkey-datapath-ignored'
 $e5 = $results | Where-Object Scenario -eq 'E5-precedence'
 $e6 = $results | Where-Object Scenario -eq 'E6-env-datadir-override'
+$e7 = $results | Where-Object Scenario -eq 'E7-replay-guard-disabled'
+$e8 = $results | Where-Object Scenario -eq 'E8-replay-guard-default'
 
 $checks = @(
     [pscustomobject]@{
@@ -298,6 +324,16 @@ $checks = @(
         Check    = '所有场景均未出现端口占用回退（端口选择有效）'
         Pass     = (-not ($results | Where-Object PortBusyWarn))
         Evidence = "端口冲突场景: " + (((($results | Where-Object PortBusyWarn).Scenario) -join ', ') -replace '^$', '无')
+    },
+    [pscustomobject]@{
+        Check    = 'E7 P2PCHAT_P2PChat__ReplayMaxAgeSeconds=0 真正生效（自检块显示「重放防护: 已关闭」）'
+        Pass     = ($e7.ReplayGuard -eq '已关闭')
+        Evidence = "ReplayGuard=$($e7.ReplayGuard)（期望 已关闭）注入值 P2PCHAT_P2PChat__ReplayMaxAgeSeconds=0 —— 这条是配置项被真实读取的证据：若键名写错，产品同样只显示默认值，永远无法与本项区分"
+    },
+    [pscustomobject]@{
+        Check    = 'E8 不设置 ReplayMaxAgeSeconds 时重放防护默认启用（自检块显示「重放防护: 已启用」）'
+        Pass     = ($e8.ReplayGuard -eq '已启用')
+        Evidence = "ReplayGuard=$($e8.ReplayGuard)（期望 已启用）注入值: 无"
     },
     [pscustomobject]@{
         Check    = '所有场景自检模式均正常退出且退出码 0（无挂死进程）'

@@ -1,4 +1,3 @@
-using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using P2PChat.Core.Abstractions;
 using P2PChat.Core.Enums;
@@ -8,26 +7,32 @@ namespace P2PChat.Chat.Handlers;
 
 /// <summary>
 /// 群聊消息处理器
+/// <para>
+/// <b>本类不再持有任何 <c>Channel&lt;ChatMessageEvent&gt;</c></b>，也<b>不再暴露</b>
+/// <c>OnMessageReceived</c>。解密出的事件一律经 <see cref="IChatEventPublisher"/> 投递到
+/// <c>ChatService</c> 持有的那唯一一条事件流 —— 那才是 UI 真正消费的那条。
+/// 见 REPAIR-PLAN B3 与 <see cref="IChatEventPublisher"/> 的「唯一来源铁律」。
+/// </para>
 /// </summary>
 public class GroupMessageHandler : IMessageHandler<TextMessage>
 {
     private readonly IEncryptionService _encryption;
     private readonly IKeyStore _keyStore;
+    private readonly IChatEventPublisher _events;
     private readonly ILogger<GroupMessageHandler> _logger;
-    private readonly Channel<ChatMessageEvent> _messageChannel;
 
     public MessageType MessageType => MessageType.GroupText;
-    public IAsyncEnumerable<ChatMessageEvent> OnMessageReceived => _messageChannel.Reader.ReadAllAsync();
 
     public GroupMessageHandler(
         IEncryptionService encryption,
         IKeyStore keyStore,
+        IChatEventPublisher events,
         ILogger<GroupMessageHandler> logger)
     {
         _encryption = encryption;
         _keyStore = keyStore;
+        _events = events ?? throw new ArgumentNullException(nameof(events));
         _logger = logger;
-        _messageChannel = Channel.CreateUnbounded<ChatMessageEvent>();
     }
 
     public async Task HandleAsync(
@@ -74,7 +79,20 @@ public class GroupMessageHandler : IMessageHandler<TextMessage>
             IsOutgoing = false
         };
 
-        await _messageChannel.Writer.WriteAsync(chatEvent, ct);
+        // 投递到 UI 消费的那条事件流（与私聊对称，见 PrivateMessageHandler）。
+        try
+        {
+            await _events.PublishAsync(chatEvent, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "群聊消息已解密但投递到事件流失败（用户可能看不到这条消息）: Group={Group}, Sender={Sender}",
+                message.ConversationId[..Math.Min(8, message.ConversationId.Length)],
+                senderId.ToHexString()[..8]);
+            return;
+        }
+
         _logger.LogDebug("群聊消息已处理: Group={Group} Sender={Sender}",
             message.ConversationId[..Math.Min(8, message.ConversationId.Length)],
             senderId.ToHexString()[..8]);

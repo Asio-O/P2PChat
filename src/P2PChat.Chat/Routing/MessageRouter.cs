@@ -19,6 +19,7 @@ public class MessageRouter : IMessageRouter
     private readonly ISerializer _serializer;
     private readonly IEncryptionService _encryption;
     private readonly IKeyStore _keyStore;
+    private readonly IReplayGuard _replayGuard;
     private readonly ILogger<MessageRouter> _logger;
     private readonly ConcurrentDictionary<MessageType, IMessageHandler> _handlers = new();
     private readonly ConcurrentDictionary<string, ITcpConnection> _connectionPool = new();
@@ -26,17 +27,23 @@ public class MessageRouter : IMessageRouter
     private const int MaxConnectionsPerPeer = 3;
     private uint _seqCounter;
 
+    /// <param name="replayGuard">
+    /// 重放防护，<b>必填</b>。刻意不给默认值：写成 <c>IReplayGuard? replayGuard = null</c> 会让
+    /// 「忘记注入」静默等于「关闭防护」—— 这是安全陷阱，必须让漏配变成编译错误。
+    /// </param>
     public MessageRouter(
         ITcpTransport tcpTransport,
         ISerializer serializer,
         IEncryptionService encryption,
         IKeyStore keyStore,
+        IReplayGuard replayGuard,
         ILogger<MessageRouter> logger)
     {
         _tcpTransport = tcpTransport;
         _serializer = serializer;
         _encryption = encryption;
         _keyStore = keyStore;
+        _replayGuard = replayGuard ?? throw new ArgumentNullException(nameof(replayGuard));
         _logger = logger;
     }
 
@@ -71,6 +78,20 @@ public class MessageRouter : IMessageRouter
             _logger.LogWarning("消息验签失败，已丢弃: Type={Type}, Reason={Reason}, From={Sender}",
                 envelope.MessageType, failureReason,
                 Convert.ToHexString(envelope.SenderId).ToLower()[..8]);
+            return;
+        }
+
+        // 重放防护（独立步骤，不并入 VerifyEnvelope）。
+        // 验签只证明「来自持私钥的一方」，不证明「不是重放的旧包」——攻击者录下一条合法信封
+        // 反复重放，仍能通过上面全部三道关卡。此处按 MessageId 去重 + 时间新鲜度判定。
+        // 放在验签**之后**是为了不对攻击者可控的数据做无谓工作；放在 handler 派发**之前**
+        // 是为了保证重放的消息不会产生任何副作用。
+        // 明因（过旧/超前/重复）由 IReplayGuard 记 LogWarning，这里不再重复打一条，
+        // 避免同一事件在日志里出现两行。
+        if (!_replayGuard.TryAccept(envelope, out var replayReason))
+        {
+            _logger.LogTrace("消息被重放防护拒绝: Type={Type}, Reason={ReplayReason}",
+                envelope.MessageType, replayReason);
             return;
         }
 

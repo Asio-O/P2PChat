@@ -44,7 +44,7 @@ public class TwoNodeChatIntegrationTests
         const string text = "端到端加密私聊：你好 B！🚀 内容必须一致";
         await alice.Chat.SendPrivateMessageAsync(bob.LocalNode.NodeId, text);
 
-        var received = await ReceiveOneAsync(bob.PrivateHandler.OnMessageReceived);
+        var received = await ReceiveOneAsync(bob.IncomingMessages);
 
         received.Content.ShouldBe(text);
         received.IsOutgoing.ShouldBeFalse();
@@ -70,11 +70,11 @@ public class TwoNodeChatIntegrationTests
         bob.Discover(alice);
 
         await alice.Chat.SendPrivateMessageAsync(bob.LocalNode.NodeId, "A->B 第一条");
-        var atBob = await ReceiveOneAsync(bob.PrivateHandler.OnMessageReceived);
+        var atBob = await ReceiveOneAsync(bob.IncomingMessages);
         atBob.Content.ShouldBe("A->B 第一条");
 
         await bob.Chat.SendPrivateMessageAsync(alice.LocalNode.NodeId, "B->A 回复");
-        var atAlice = await ReceiveOneAsync(alice.PrivateHandler.OnMessageReceived);
+        var atAlice = await ReceiveOneAsync(alice.IncomingMessages);
         atAlice.Content.ShouldBe("B->A 回复");
     }
 
@@ -91,7 +91,7 @@ public class TwoNodeChatIntegrationTests
 
         var received = new List<string>();
         using var cts = new CancellationTokenSource(20000);
-        await foreach (var evt in bob.PrivateHandler.OnMessageReceived.WithCancellation(cts.Token))
+        await foreach (var evt in bob.IncomingMessages.WithCancellation(cts.Token))
         {
             received.Add(evt.Content);
             if (received.Count == expected.Count) break;
@@ -111,7 +111,7 @@ public class TwoNodeChatIntegrationTests
         var text = new string('A', 200_000);
         await alice.Chat.SendPrivateMessageAsync(bob.LocalNode.NodeId, text);
 
-        var received = await ReceiveOneAsync(bob.PrivateHandler.OnMessageReceived);
+        var received = await ReceiveOneAsync(bob.IncomingMessages);
 
         received.Content.Length.ShouldBe(200_000);
         received.Content.ShouldBe(text);
@@ -127,7 +127,7 @@ public class TwoNodeChatIntegrationTests
         const string text = "中文 / English / 日本語 / 한국어 / العربية / русский / emoji 🎉🔒";
         await alice.Chat.SendPrivateMessageAsync(bob.LocalNode.NodeId, text);
 
-        var received = await ReceiveOneAsync(bob.PrivateHandler.OnMessageReceived);
+        var received = await ReceiveOneAsync(bob.IncomingMessages);
 
         received.Content.ShouldBe(text);
         Encoding.UTF8.GetBytes(received.Content).ShouldBe(Encoding.UTF8.GetBytes(text));
@@ -143,7 +143,7 @@ public class TwoNodeChatIntegrationTests
         bob.KeyStore.GetSessionKey(new NodeId(alice.SenderId)).ShouldBeNull("交换前不应有会话密钥");
 
         await alice.Chat.SendPrivateMessageAsync(bob.LocalNode.NodeId, "触发密钥交换");
-        await ReceiveOneAsync(bob.PrivateHandler.OnMessageReceived);
+        await ReceiveOneAsync(bob.IncomingMessages);
 
         var bobSideKey = bob.KeyStore.GetSessionKey(new NodeId(alice.SenderId));
         bobSideKey.ShouldNotBeNull("接收端处理 KeyExchange 后应持有会话密钥");

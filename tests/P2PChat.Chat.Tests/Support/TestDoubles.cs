@@ -1,5 +1,9 @@
 using System.Net;
 using System.Text.Json;
+using System.Threading.Channels;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using P2PChat.Chat.Routing;
 using P2PChat.Core.Abstractions;
 using P2PChat.Core.Enums;
 using P2PChat.Core.Models;
@@ -7,6 +11,42 @@ using P2PChat.Crypto.Keys;
 using P2PChat.Core.Extensions;
 
 namespace P2PChat.Chat.Tests.Support;
+
+/// <summary>
+/// 事件捕获器 —— <see cref="IChatEventPublisher"/> 的测试替身，记录 handler 投递出来的每一条聊天事件。
+/// <para>
+/// <b>为什么 Chat.Tests 与 Integration.Tests 各有一份同名类</b>：两个测试项目之间<b>没有</b>
+/// ProjectReference（Chat.Tests 只引用 Chat / Core / Crypto），同名类型跨程序集不可见。
+/// 这不是重复劳动；要合并只能把类型下沉进某个被两者共同引用的产品程序集，
+/// 那是为测试便利污染产品 API 面，不划算。
+/// </para>
+/// <para>
+/// <b>为什么用它而不是「去读一条空通道然后等超时」</b>：后者表达的只是
+/// 「我在 300ms 内没读到东西」—— 这是<b>弱证据</b>，可能是慢、可能是调度、也可能只是超时太短。
+/// 本替身让「处理器没有产出任何事件」成为<b>确定性的否定断言</b>：
+/// <c>Published.ShouldBeEmpty()</c> 断言的是「发布器确实一个事件都没收到过」。
+/// </para>
+/// </summary>
+public sealed class CapturingChatEventPublisher : IChatEventPublisher
+{
+    private readonly Channel<ChatMessageEvent> _channel = Channel.CreateUnbounded<ChatMessageEvent>();
+    private readonly List<ChatMessageEvent> _published = [];
+
+    /// <summary>可异步订阅的已发布事件流。</summary>
+    public IAsyncEnumerable<ChatMessageEvent> Events => _channel.Reader.ReadAllAsync();
+
+    /// <summary>已发布事件的快照（线程安全）。</summary>
+    public IReadOnlyList<ChatMessageEvent> Published
+    {
+        get { lock (_published) return _published.ToList(); }
+    }
+
+    public Task PublishAsync(ChatMessageEvent chatEvent, CancellationToken ct = default)
+    {
+        lock (_published) _published.Add(chatEvent);
+        return _channel.Writer.WriteAsync(chatEvent, ct).AsTask();
+    }
+}
 
 /// <summary>
 /// 内存密钥存储 — 测试专用，避免触碰真实磁盘（<c>FileBackedKeyStore</c> 依赖 <see cref="DataPath"/> 静态状态）。
@@ -215,6 +255,42 @@ public sealed class FakeTcpConnection : ITcpConnection
         Disposed = true;
         IsConnected = false;
         return ValueTask.CompletedTask;
+    }
+}
+
+/// <summary>
+/// <c>MessageRouter</c> 构造工厂 —— 全仓唯一的 router 构造点。
+/// <para>
+/// <b>这里必须注入真实的 <see cref="MessageReplayGuard"/>,不能用「永远放行」的假实现。</b>
+/// 假实现等于测试环境里根本没有防护：入站重放防护一旦被误删/被改坏，
+/// 用假实现的用例照样全绿，守卫形同虚设。
+/// </para>
+/// </summary>
+public static class TestRouters
+{
+    /// <summary>
+    /// 构造一个装配了真实重放防护的 <see cref="MessageRouter"/>。
+    /// </summary>
+    /// <param name="replayGuard">
+    /// 自定义防护；不传则用真实 <see cref="MessageReplayGuard"/> + 注入的固定时钟。
+    /// 需要放宽时间窗时（MaxAge/MaxFutureSkew/历史长度）应显式传入，
+    /// 传 <c>null</c> 永远不会「关闭防护」，只会用默认策略。
+    /// </param>
+    /// <param name="now">注入给默认防护的固定时钟；不传则用 UTC 当前时间。</param>
+    public static MessageRouter Create(
+        ITcpTransport transport,
+        ISerializer serializer,
+        IEncryptionService encryption,
+        IKeyStore keyStore,
+        IReplayGuard? replayGuard = null,
+        ILogger<MessageRouter>? logger = null,
+        Func<DateTimeOffset>? now = null)
+    {
+        var guard = replayGuard ?? new MessageReplayGuard(
+            NullLogger<MessageReplayGuard>.Instance, now: now);
+        return new MessageRouter(
+            transport, serializer, encryption, keyStore, guard,
+            logger ?? NullLogger<MessageRouter>.Instance);
     }
 }
 

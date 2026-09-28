@@ -20,7 +20,21 @@ namespace P2PChat.Core.Models;
 ///     这是 BitTorrent 客户端「NAT 后仍可被找到」的机制。
 ///   </item>
 ///   <item>
-///     <see cref="ExternalEndPoint"/> —— 可选；预留作为外部观察到的公网入口（Phase 2 填充）。
+///     <c>ExternalEndPoint</c> —— <b>已于 2026-09-28 删除</b>。
+///     该字段从建立起就<b>零读取点</b>，且语义与 <see cref="EndPoint"/> 重复：
+///     <c>ResolveViaGetPeersAsync</c> 里 <c>tcpEp = new IPEndPoint(ip, port)</c> 的 <c>ip</c>
+///     取自 <c>p2pc_peers</c>，而那是接收方从 announce 包的<b>源地址</b>记录的 ——
+///     也就是对端在 NAT 后的<b>公网地址</b>。所以「外部入口」就是 <see cref="EndPoint"/>，
+///     不存在第二个需要单独记录的地址。
+///     <para>
+///     删除原因：它曾两次导致误判 —— 「零赋值点」被外推成「NAT 后不可被连入」，
+///     而实际上 <c>MessageRouter</c> 只连 <see cref="EndPoint"/> 是<b>正确</b>的。
+///     一个既无人读、又与现有字段语义重复的字段，是纯粹的认知陷阱。
+///     </para>
+///     <para>
+///     若将来实现 2.4（中继 / 打洞）需要区分「直连地址」与「观测到的公网地址」，
+///     应在届时的真实需求下重新引入，并写明两者何时不同。
+///     </para>
 ///   </item>
 /// </list>
 /// </remarks>
@@ -44,9 +58,6 @@ public record NodeInfo
     /// 不被 TCP 连接路径使用；只为 NAT 诊断与外部公网可达性提供信息。
     /// </remarks>
     public IPEndPoint? DhtEndPoint { get; init; }
-
-    /// <summary>外部可观察IP终结点 (用于NAT穿透)</summary>
-    public IPEndPoint? ExternalEndPoint { get; init; }
 
     /// <summary>
     /// 节点身份公钥 — ECDH nistP256，格式为 SubjectPublicKeyInfo (DER，91字节)。

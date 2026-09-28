@@ -91,7 +91,7 @@ public class IdentityAndEndpointTests
         bob.Dht.RegisterStaticPeer(StaticPeer(alice.LocalNode));
 
         await alice.Chat.SendPrivateMessageAsync(bob.LocalNode.NodeId, "A->B 仅凭显式端点");
-        var atBob = await ReceiveOneAsync(bob.PrivateHandler.OnMessageReceived);
+        var atBob = await ReceiveOneAsync(bob.IncomingMessages);
 
         atBob.Content.ShouldBe("A->B 仅凭显式端点");
         atBob.SenderId.ToByteArray().ShouldBe(alice.SenderId,
@@ -102,7 +102,7 @@ public class IdentityAndEndpointTests
             ConversationId.ForPrivate(alice.LocalNode.NodeId, bob.LocalNode.NodeId));
 
         await bob.Chat.SendPrivateMessageAsync(alice.LocalNode.NodeId, "B->A 回复");
-        var atAlice = await ReceiveOneAsync(alice.PrivateHandler.OnMessageReceived);
+        var atAlice = await ReceiveOneAsync(alice.IncomingMessages);
 
         atAlice.Content.ShouldBe("B->A 回复");
         atAlice.ConversationId.ShouldBe(atBob.ConversationId,
@@ -128,7 +128,7 @@ public class IdentityAndEndpointTests
         bob.Discover(alice);
 
         await alice.Chat.SendPrivateMessageAsync(bob.LocalNode.NodeId, "触发密钥交换");
-        await ReceiveOneAsync(bob.PrivateHandler.OnMessageReceived);
+        await ReceiveOneAsync(bob.IncomingMessages);
 
         // 发送方把会话密钥登记在「对端节点ID」下
         alice.KeyStore.GetSessionKey(bob.LocalNode.NodeId).ShouldNotBeNull(

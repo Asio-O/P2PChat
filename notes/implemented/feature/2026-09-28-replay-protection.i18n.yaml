@@ -1,0 +1,32 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/implemented/feature/2026-09-28-replay-protection.md
+  zh: notes/implemented/feature/2026-09-28-replay-protection.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: Inbound replay protection (timestamp freshness window + MessageId dedup)"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+      - Deferred
+      - Related
+    tokens: []
+  zh:
+    heading: "# Agent Note: 入站重放防护（时间新鲜度窗口 + MessageId 去重）"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+      - Deferred
+      - Related
+    tokens: []
+
+recorded: 2026-09-28

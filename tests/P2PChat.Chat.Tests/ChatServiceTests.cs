@@ -183,7 +183,7 @@ public class ChatServiceTests
         var h = Build();
         var peerConversation = ConversationId.ForPrivate(h.Local.NodeId, h.Peer.NodeId);
 
-        await h.Service.PublishMessageAsync(new ChatMessageEvent
+        await h.Service.PublishAsync(new ChatMessageEvent
         {
             Content = "收到的消息",
             SenderId = h.Peer.NodeId,
@@ -220,7 +220,7 @@ public class ChatServiceTests
         var transport = new FakeTcpTransport();
         // 用真实 MessageRouter：它负责签名信封，ChatService 负责发起交换，
         // 真实 KeyExchangeHandler 在同一条连接上回响应 —— 完整走一遍线上握手。
-        var router = new MessageRouter(transport, Wire, crypto, localKs, NullLogger<MessageRouter>.Instance);
+        var router = TestRouters.Create(transport, Wire, crypto, localKs);
         var peerHandler = new KeyExchangeHandler(crypto, peerKs, NullLogger<KeyExchangeHandler>.Instance);
 
         var link = new FakeTcpConnection(peer.EndPoint);

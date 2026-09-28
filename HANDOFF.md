@@ -2,26 +2,31 @@
 
 > 交接日期：2026-09-28
 > 目标：完成 [REPAIR-PLAN.md](REPAIR-PLAN.md) 阶段 1–4
-> 状态：**✅ 全部收口。阶段 0–4 全部完成，e2e `FAIL=0`。** 本轮 9 项任务全部 completed
-> 门禁：`dotnet build` **0 错 0 警** ✅ + `dotnet test` **297 通过 / 0 失败 / 0 跳过** ✅ + `dotnet publish` AOT **我方 0 条** ✅（第三方 4 条，见 §3.1 的重要说明）+ `scripts/e2e-verify.ps1` **PASS=39 / FAIL=0 / SKIP=0，退出码 0** ✅
+> 状态：**上一轮已收口（阶段 0–4 全部完成，e2e `FAIL=0`）。🟢 本轮进行中：重放防护实现中 + Lead 独立修复中，门禁待复跑。**
+> 门禁：**上一轮实测** `dotnet build` 0 错 0 警 + `dotnet test` 297 通过 / 0 失败 / 0 跳过 + AOT 我方 0 条 + e2e `PASS=39 / FAIL=0 / SKIP=0` ✅
+> **🕐 本轮尚未复跑 —— 上列全部为上一轮收口值，引用前请重新跑一遍。** 本轮实测值由 Lead 跑完后填入 §3.1。
 > 阶段落地明细：[REPAIR-PLAN.md「实施进度」与「阶段 1/2/3 实施记录」](REPAIR-PLAN.md)（`MainlineDhtService.cs` 采用方法名而非行号，原因见该节顶部警告）
-> 仍开放项：**5 条**（见 §8），其中 🔴 阻塞验收的只有「同局域网 vs 跨网络」需用户确认
+> 仍开放项：**6 条**（见 §8），其中 🔴 阻塞验收的只有「同局域网 vs 跨网络」需用户确认
 
 ---
 
 ## 1. 一句话现状
 
-REPAIR-PLAN 阶段 0–4 全部落地并通过全部门禁：`dotnet build` 0 错 0 警、`dotnet test` 297 全绿、
-AOT 发布我方 0 条警告、e2e 端到端 `PASS=39 / FAIL=0`。
-文档与代码已对齐（`REPAIR-PLAN.md` / `HANDOFF.md` / `Agent.md` / `README.md` 同步于 2026-09-28）。
-**唯一需要人回答的问题是「两台目标设备是同局域网还是跨网络」** —— 它决定阶段 2 是硬需求还是可降级项，
-代码走的是尽力而为路线，**不能据「已实现」反推「用户场景已覆盖」**。
+**上一轮** REPAIR-PLAN 阶段 0–4 全部落地并通过全部门禁（`dotnet build` 0 错 0 警、
+`dotnet test` 297 全绿、AOT 我方 0 条、e2e `PASS=39 / FAIL=0`），文档与代码已对齐。
+**本轮**正在补两处：入站**重放防护**（阶段 3.2 签名留下的缺口）与 `/connect` hello 响应的
+**验签缺失**（未经认证的对端引入）。
+重放防护**实现与接线已落地，但测试仍在红**，因此**尚未关闭**该项（见 §8 #4）。
+
+**唯一需要人回答、且代码无法代替的问题是「两台目标设备是同局域网还是跨网络」** ——
+它决定阶段 2 是硬需求还是可降级项，代码走的是尽力而为路线，
+**不能据「已实现」反推「用户场景已覆盖」**。
 
 ---
 
 ## 2. 任务板状态
 
-### 2.1 本轮（收尾轮，2026-09-28）—— 共享任务板
+### 2.1 上一轮（收口轮，2026-09-28）—— 9 项任务全部 completed
 
 | 任务 | 主题 | 负责人 | 状态 |
 |---|---|---|---|
@@ -35,54 +40,74 @@ AOT 发布我方 0 条警告、e2e 端到端 `PASS=39 / FAIL=0`。
 | task-8 | 更新 `REPAIR-PLAN.md` 进度表 + 本文档 | plan-scribe | ✅ completed |
 | task-9 | AOT 门禁 + 最终 e2e 验证 + 未提交 diff 安全性审查 | **lead 本人认领** | ✅ completed |
 
-> ⚠️ **编号提醒**：上一版 §2 用的 `task-1`…`task-6` 是**旧板**编号，与上表**不是同一批任务**，
-> 按主题对照会串。上一轮的成果已改按阶段收进 §2.2 / §9。
+### 2.2 本轮（2026-09-28 起）—— 进行中
 
-### 2.2 上一轮已交付（按阶段归档，不再占用 task 编号）
+| 负责人 | 主题 | 状态 |
+|---|---|---|
+| keyexchange-fixer | 入站**重放防护**实现（`IReplayGuard` 已有接口，实现在途） | 🟡 in_progress |
+| chattests-filler | 重放防护测试（串行 / 并发 / 过期 / 未来 / 不误杀） | 🟡 in_progress |
+| plainmode-tester | 重放防护**配置接线** | 🟡 in_progress |
+| lead | 若干与重放无关的独立修复 + 本轮门禁实跑 | 🟡 in_progress |
+| plan-scribe | REPAIR-PLAN / HANDOFF 跟进（task-16） | 🟡 in_progress |
+
+> ⚠️ **在 Lead 说出「可以收口了」之前**，本节的 4.4–4.6 状态与 §3 的任何门禁数字都不得改成新值。
+
+> ⚠️ **编号提醒**：更早版本 §2 用过的 `task-1`…`task-6` 是**旧板**编号，与 §2.1 **不是同一批任务**，
+> 按主题对照会串。阶段 0–4 的成果已改按阶段收进 §2.3 / §9。
+
+### 2.3 阶段 0–4 交付归档（按阶段，不再占用 task 编号）
 
 | 阶段 | 主题 | 负责人 | 状态 |
 |---|---|---|---|
 | 阶段 0 | 显式端点 + 真实 `SenderId` + 方向无关会话键 | discovery-engineer | ✅ completed |
 | 阶段 1 | DHT `announce_peer`/`get_peers` 闭环 + 端口语义解耦 | discovery-engineer | ✅ completed |
-| 阶段 2 | NAT 穿透（UPnP / `ExternalEndPoint`） | discovery-engineer | ✅ completed（**2.4 除外**，见 §8 #7） |
+| 阶段 2 | NAT 穿透（UPnP / `ExternalEndPoint`） | discovery-engineer | ✅ completed（**2.4 除外**，见 §8 #8） |
 | 阶段 3.1 / 3.3 / 3.4 | 群消息加密 / 群元数据持久化 / 文件 ChunkSize | security-engineer | ✅ completed |
-| 阶段 3.2 | 消息签名（长期 ECDSA） | security-engineer | ✅ completed |
+| 阶段 3.2 | 消息签名（长期 ECDSA） | security-engineer | ✅ completed（**重放防护缺口本轮跟进中**，见 §8 #4） |
 | 阶段 4.1–4.3 | `NodeHarness.SenderId` 回归 + 防复发守卫断言 | test-engineer | ✅ completed |
 | 阶段 4.4 | 真实发现闭环测试 `RealDiscoveryTests` | test-engineer | ✅ completed |
 | 阶段 4.5 | `KnownDefectsTests` 清理（死 skip 分支已删） | test-engineer | ✅ completed |
-| 阶段 4.6 | e2e 明文往返断言 A29–A32 | test-engineer | 🟡 **代码已落地，未复跑** |
+| 阶段 4.6 | e2e 明文往返断言 A29–A32 | test-engineer | ✅ **e2e 实测 `PASS=39 / FAIL=0`** |
 | 零散 | `ContactService` 文档漂移 + `/connect <ip:port>` | test-engineer | ✅ completed |
 
 ---
 
-## 3. 门禁指标（全部实测，2026-09-28 收口）
+## 3. 门禁指标
+
+> 🕐 **本节所有数字均为「上一轮收口值（2026-09-28），非本轮实测」。**
+> **2026-09-28 起已进入新一轮改动**（重放防护 + Lead 的独立修复），本轮门禁**尚未复跑**。
+> **引用前请重新跑一遍** —— 上一轮我们已经吃过一次「数字看起来权威但已过期」的亏。
+> 教训：权威性来自**新鲜度**，不是来自**排版工整**。
 
 ```
-dotnet build P2PChat.slnx -t:Rebuild   →  0 个警告 / 0 个错误   ✅
-dotnet test  P2PChat.slnx              →  297 通过 / 0 失败 / 0 跳过   ✅
+dotnet build P2PChat.slnx -t:Rebuild   →  0 个警告 / 0 个错误   ✅（上一轮）
+dotnet test  P2PChat.slnx              →  297 通过 / 0 失败 / 0 跳过   ✅（上一轮）
     Crypto.Tests            8
     Core.Tests             52
-    Chat.Tests             80   ← 本轮从空壳（0）填起
+    Chat.Tests             80   ← 上轮从空壳（0）填起
     Integration.Tests     134
     Networking.Tests       23
-dotnet publish -c Release              →  我方代码 0 条 IL/AOT 警告   ✅（第三方 4 条，见 §3.1）
-scripts/e2e-verify.ps1                 →  PASS=39 / FAIL=0 / SKIP=0，退出码 0   ✅
+dotnet publish -c Release              →  我方代码 0 条 IL/AOT 警告   ✅（上一轮；第三方 4 条）
+scripts/e2e-verify.ps1                 →  PASS=39 / FAIL=0 / SKIP=0，退出码 0   ✅（上一轮）
 ```
 
-> 📌 **测试数演进轨迹**：阶段 0 前 121 → 阶段 0 后 146 → 本轮中途 179 → **收口 297**。
+> 📌 **测试数演进轨迹**：阶段 0 前 121 → 阶段 0 后 146 → 中途 179 → 上一轮收口 **297** → **本轮待重测**。
 > 增长主要来自 task-3 把 `Chat.Tests` 从空壳填成 80 条，以及 task-2 / task-4 / task-5 的回归测试。
 > `Chat.Tests` 曾是「没有可用测试」的空壳，**这也是阶段 4.1–4.6 的测试策略第一次真正落到底层单元**。
 >
 > ⚠️ `dotnet test --no-build` 会读到过期 DLL 产生假失败。**测试前先 build。**
 
-### 3.1 收口回填（全部为实测值）
+### 3.1 门禁回填表
 
-| 门禁 | 收口值 | 通过标准 |
-|---|---|---|
-| `dotnet build -t:Rebuild` 警告 / 错误 | **0 / 0** | 0 / 0 ✅ |
-| `dotnet test` 通过 / 失败 / 跳过 | **297 / 0 / 0** | 全绿 ✅ |
-| `dotnet publish` IL/AOT 警告 | **我方代码 0 条 / 第三方程序集 4 条** | 见下方说明 ✅ |
-| e2e `PASS` / `FAIL` / `SKIP` | **39 / 0 / 0**，退出码 0 | FAIL=0 ✅（起始基线 32/5） |
+| 门禁 | 上一轮收口值 | 本轮实测值 | 通过标准 |
+|---|---|---|---|
+| `dotnet build -t:Rebuild` 警告 / 错误 | 0 / 0 | _待 Lead 给出_ | 0 / 0 |
+| `dotnet test` 通过 / 失败 / 跳过 | 297 / 0 / 0 | _待 Lead 给出_ | 全绿 |
+| `dotnet publish` IL/AOT 警告 | 我方 0 条 / 第三方 4 条 | _待 Lead 给出_ | 见下方说明 |
+| e2e `PASS` / `FAIL` / `SKIP` | 39 / 0 / 0，退出码 0 | _待 Lead 给出_ | FAIL=0 |
+
+> ⚠️ **「本轮实测值」一栏在 Lead 亲自跑完门禁之前必须保持 `_待 Lead 给出_`。**
+> **无实测证据的「已完成」比「未完成」更有害** —— 见本轮反复出现的这条主题。
 
 #### ⚠️ AOT 门禁为什么**不是**一个干净的「0」
 
@@ -264,7 +289,11 @@ A32 原先断言「nodeA2 看不到明文」。**这个前提本身是错的**�
 
 ---
 
-## 5. 后续接手：复现本轮门禁（原步骤已全部执行完毕，此处留作复现手册）
+## 5. 复现手册：怎么重新验证本项目的门禁
+
+> 🎯 本节不是「交接清单」，是**可重复执行的验证手册**。
+> **不要只信本文档记录的数字** —— 权威性来自你能自己跑出来一遍。
+> 步骤 1–4 复现上一轮门禁；步骤 5 验证**重放防护真的生效**（不只是「测试跑过了」）。
 
 > 原「步骤 1–4」是本轮的执行清单，**已全部完成**（见 §3.1）。下面按**复现顺序**重排，
 > 供下一个团队**独立重跑一遍**以验证结论可重复 —— **不要只信本文档的记录。**
@@ -278,30 +307,106 @@ A32 原先断言「nodeA2 看不到明文」。**这个前提本身是错的**�
 
 ```bash
 dotnet build P2PChat.slnx -t:Rebuild   # 必须 0 错 0 警
-dotnet test  P2PChat.slnx              # 必须全绿（当前 297 通过 / 0 失败 / 0 跳过）
+dotnet test  P2PChat.slnx              # 必须全绿（上一轮收口 297 通过 / 0 失败 / 0 跳过，本轮请以实跑为准）
 ```
 
 ### 步骤 3：AOT 发布（必须先做，否则测的是旧 exe）
 
 ```bash
-dotnet publish src/P2PChat.App/P2PChat.App.csproj -c Release   # 必须先做，否则测的是旧 exe
-pwsh -NoProfile -File scripts\e2e-verify.ps1 -SelfTestWaitMs 20000
+dotnet publish src/P2PChat.App/P2PChat.App.csproj -c Release
 ```
 
-目标：**FAIL=0**。本轮实测 `PASS=39 / FAIL=0 / SKIP=0`，退出码 0。
-
-> ⚠️ `dotnet publish` 阶段逐条检查 **IL2026 / IL2070 / IL2072 / IL2075 / IL3050 / IL3053**：
-> 本轮实测**我方代码 0 条**，第三方 4 条（`MessagePack.dll` IL3053+IL2104、`Serilog.dll` IL2104）。
+> ⚠️ 逐条检查 **IL2026 / IL2070 / IL2072 / IL2075 / IL3050 / IL3053**：
+> 上一轮实测**我方代码 0 条**，第三方 4 条（`MessagePack.dll` IL3053+IL2104、`Serilog.dll` IL2104）。
 > ⚠️ 判读方式见 §3.1 —— 这是**人工判断**，不存在可依赖的阈值。
-
-> ⚠️ 脚本默认 exe 路径是 `src/P2PChat.App\bin\Release\net11.0\win-x64\publish\P2PChat.App.exe`。
-> **不重新 publish 就会测到旧代码** —— 仓库里那个 exe 的 mtime 曾长期停在 2026-09-16。
-> 校验产物请比对 §3.1 的 SHA256（中途修复触发过重新发布，SHA256 已变过一次）。
 >
-> 📌 本轮 DHT 引导已从 **40.02s 优化到 3.01s**（13.3×，优化前为实跑基线非估算），e2e 单次耗时相应下降。
+> ⚠️ 产物 exe 路径是 `src\P2PChat.App\bin\Release\net11.0\win-x64\publish\P2PChat.App.exe`。
+> **不重新 publish 就会测到旧代码** —— 仓库里那个 exe 的 mtime 曾长期停在 2026-09-16。
+> 校验产物请比对 §3.2 的 SHA256（中途修复触发过重新发布，SHA256 已变过一次）。
 >
 > ⚠️ 绝不要复制 exe（会触发 Windows 防火墙重复弹窗，是历史用户投诉根因）。实例隔离只靠
 > `P2PCHAT_DATA_DIR`（漏了会让两个实例共用 `identity.json` → NodeId 相同 → 无法互认，见断言 A24）。
+
+### 步骤 4：复跑 e2e
+
+```bash
+pwsh -NoProfile -File scripts\e2e-verify.ps1 -SelfTestWaitMs 20000
+```
+
+目标：**FAIL=0**。上一轮实测 `PASS=39 / FAIL=0 / SKIP=0`，退出码 0（起始基线 32/5）。
+
+> 📌 DHT 引导已从 **40.02s 优化到 3.01s**（13.3×，优化前为实跑基线非估算），e2e 单次耗时相应下降。
+
+
+### 步骤 5：验证**重放防护真的生效**（不只是「测试跑过了」）
+
+> 🎯 **这一节回答的不是「测试绿了吗」，而是「重放防护真的挡住了吗」。**
+> 测试全绿只证明**被写下来的那些用例**成立，它证明不了**攻击者会怎么打**。
+> 下面四条按攻击者能力从弱到强排列，**每条都要自己动手打一遍**，不要只读测试名。
+
+#### 5.1 复现一条**完全合法**的重放
+
+ECDSA 签名能证明「来自持私钥的一方」，**不能**证明「这是一条新消息」。
+攻击者录下一条**合法**信封（原封不动、签名有效、验签全过）反复重放 —— 这是最基础的攻击。
+
+```
+1) 正常发一条消息，从 nodeB 侧取到那一条【完整信封的原始字节】
+2) 把这串字节原封不动再喂给 nodeB 一次
+```
+
+- **要看的证据**：不是「没报错」，而是**第二次明确被拒 + 只投递了一次事件**。
+- ⚠️ **最常见的假阳性**：拒绝发生在验签**之前**（长度/公钥检查），那证明不了重放防护起作用。
+  **务必确认拒绝原因来自重放判定本身**，而不是被别的关卡顺带挡下。
+
+#### 5.2 验证**并发重放**（契约要求原子性）
+
+`IReplayGuard.TryAccept` 的契约明写：**「两条完全相同的信封并发到达时，有且只有一条能返回 true」**。
+用 `Task.WhenAll` 同时灌 2 条、再灌 50 条同一信封：
+
+- **期望**：恰好 1 条被接受，其余全部被拒。
+- ⚠️ **这是最容易漏掉的一条**：只测串行重放会通过，但 `Check` 与 `Add` 之间的竞态**只在并发下暴露**。
+  实现若用「先查后加」而非原子操作，串行测试**全绿**而并发直接放行 N-1 条。
+
+#### 5.3 验证**过期**与**未来**时间戳
+
+`Timestamp` 此前「签了但不校验新鲜度」。现在确认两端都被拒：
+
+| 输入 | 期望 | 攻击含义 |
+|---|---|---|
+| `Timestamp` 早于 `ReplayMaxAgeSeconds` | 拒（原因：过旧） | 重放数小时前的包 |
+| `Timestamp` 明显在**未来** | 拒（原因：来自未来） | 时钟回拨 / 预生成包 |
+
+> ⚠️ **`ReplayMaxAgeSeconds <= 0` 时是完全无防护的**（见 §8.1 残余风险）。
+> 验证时**必须显式确认当前配置值 > 0**，否则你测的其实是「关闭状态」。
+> 该值从 `P2PChat:ReplayMaxAgeSeconds` 读取（`Program.cs`，默认 3600 秒）；
+> `<= 0` 时 TUI 自检块会显式提示「重放防护已关闭 —— 逃生阀已打开」。
+
+#### 5.4 验证**不误杀正常流量**（反向检查，最容易漏）
+
+重放防护是**有状态**的，最常见的失败不是「挡不住」，而是**「挡住了正常消息」**：
+
+- 正常连续发 N 条**不同**消息 → **一条都不能被拒**；
+- 同一对端**高频**互发（压一下 `MessageId` 缓存与环形容量）→ 仍不能误杀；
+- 重启后立即互发 → 仍正常（跨重启**不应**因缓存清空而误杀**新**消息）。
+
+> 📌 **判据**：装上防护后，`dotnet test` 的**既有签名/收发测试必须仍然全绿**。
+> 若加防护炸红了一堆语义正确的测试，多半是把有状态策略塞进了 `MessageRouter.VerifyEnvelope` ——
+> 那是**纯密码学、无状态、可重复调用**的函数，同一信封校验两次第二次就会失败。
+> `IReplayGuard` 的设计注释正是为此把它与验签**刻意分离**，不要合并。
+
+#### 5.5 复核「重放键选对了」——别把它"优化"成 `SequenceNumber`
+
+重放键必须是**已被签名覆盖的 `MessageId`**（16 字节 Guid，天然唯一）。
+若有人日后想改成 `SequenceNumber`，**以下事实足以否掉该改动**：
+
+| 事实 | 后果 |
+|---|---|
+| `SequenceNumber` 由**进程内** `Interlocked.Increment` 生成 | **进程重启即归零**，不能作跨重启的单调水位 |
+| **同一节点存在两个互相独立的序号计数器**：`MessageRouter._seqCounter` 与 `KeyExchangeHandler._responseSequence` | 两者都从 1 开始，**同一对端的不同消息可能合法携带相同的 `SequenceNumber`** |
+
+> 📌 **结论：在本协议里 `SequenceNumber` 根本不是唯一键。** 第二条比「重启归零」更硬 ——
+> 它说明即使不重启，序号也可能**合法重复**，拿它做去重键会直接误杀正常流量（与 5.4 冲突）。
+> 这是 note-writer 在实现过程中独立发现的，不是事后补的理由。
 
 ---
 
@@ -352,21 +457,28 @@ pwsh -NoProfile -File scripts\e2e-verify.ps1 -SelfTestWaitMs 20000
     `Agent.md` §3.3 同步。这三份经 grep 核对**确认仍在且有效**，不要重做。
   - 派它做长时 e2e 验证时，务必让 Lead 亲自跑最后一遍。
 
-### 7.2 本轮（收尾轮）
+### 7.2 收口轮（2026-09-28）
 
 - 本轮 8 名成员各守一个 write scope，**互不重叠**。改 `scripts/` 的不知道 `src/` 改了什么，
   所以**跨 agent 的假设必须由 Lead 统一核对**（本轮最容易翻车的三处已在文档里点名：
-  §4.2 末尾的引导日志字面量、§8 #6 的 AOT 未验证、§3 的测试数基线）。
+  §4.2 末尾的引导日志字面量、§3.1 的 AOT 判读方式、§3 的测试数基线）。
 - **e2e 只能由 Lead 亲自跑**（单次约 10 分钟，超出队员执行窗口 —— 上一轮就是这么翻车的）。
   其它 agent 只做静态核对。
 - **行号纪律**：文档里写的落地位置必须 grep 源码核对，不能照抄上一份文档的行号 ——
   DEFECTS.md 记的是「缺陷发现时」的行号，HANDOFF §4 记的是「当时」的行号。**写错行号比不写更糟。**
+- **并发编辑期间写进文档的行号是有保质期的资产**：本轮 `MainlineDhtService.cs` 因 task-5 并发修改，
+  当日全部行号漂移（`BootstrapAsync` 99→124、`ApplyMapping` 888→970 等 13 处）。
+  处理方式是**改用方法名**而非行号 —— 方法名不受漂移影响。给易变文件写行号前先想清楚这一点。
+- **核实了局部事实 ≠ 可以外推出全局结论**（本人反面教材）：曾从「`ExternalEndPoint` 零赋值点」
+  这一**正确**事实，推出「跨网络建连不闭合」这一**错误**结论，被复核推翻。
+  错在默认了「公网入口只能经由该字段抵达建连路径」，没检查 `announce_peer` 是否已把公网 IP
+  **直接烘进** `EndPoint`。**把「死字段」当成「能力缺失」** 是这类外推的典型形态。
 
 ---
 
 ## 8. 已知遗留
 
-> 状态图例：🔴 阻塞验收 / ⚪ 后续处理（本轮已无 🟠 处理中项 —— 9 项任务全部 completed）
+> 状态图例：🔴 阻塞验收 / 🟠 本轮处理中 / ⚪ 后续处理
 
 1. 🔴 **REPAIR-PLAN 自身未回答的问题（阻塞验收，必须先问用户）**：两台目标设备是**同一局域网**
    还是**家庭/移动不同网络**？这决定阶段 2（NAT 穿透）是硬需求还是可以降级。
@@ -378,15 +490,57 @@ pwsh -NoProfile -File scripts\e2e-verify.ps1 -SelfTestWaitMs 20000
 2. ⚪ **静态/盲连接对端的 `PublicKey` 为空** → 群邀请需要公钥包装密钥。
    ✅ **task-4 已处理**：`KeyExchangeMessage` 回送长期公钥（线路变更）+ `CreateGroupAsync` 的
    `catch {}` 已改为带日志告警，静默吞掉这一独立缺陷已消除。详见 §8.1。
-3. ⚪ **无重放保护**：`MessageEnvelope.SequenceNumber`（`MessageRouter` 出站经 `NextSeq()` 自增、
+3. 🔴 **`/connect` 的 hello 响应全程不验签 —— 未经认证的对端引入**（2026-09-28 浮现，Lead 亲自 build 后确认）。
+   `P2PChatTui.ReadHelloResponseAsync` 只做 `EnvelopeCodec.Deserialize` 就取载荷使用，
+   **任何抢在真节点前应答的主机都会被无条件信任并登记为静态对端**。
+   严重度高于「响应不过重放检查」—— 后者是在**已认证**对端的前提下重复投递，
+   而这里是**对端身份本身未经认证**。
+   → **修法与验收标准固化在共享任务板 `task-17`，此处不重复记录以免与任务描述漂移。**
+4. 🟠 **无重放保护 —— 实现与接线已落地，测试仍在红，未关闭**
+   **原缺口**：`MessageEnvelope.SequenceNumber`（`MessageRouter` 出站经 `NextSeq()` 自增、
    `EnvelopeCodec` 写进线路）**只写不校验**；`Timestamp` 虽被签名覆盖，**但不校验新鲜度**。
    即：签名能证明「消息来自持有私钥的一方」，但**不能证明「这条消息不是重放的旧包」**。
-   需补：按 `(SenderId, SequenceNumber)` 去重的水位表 + 时间窗新鲜度检查。**尚未指派。**
-4. ⚪ **`P2PChatTui` 仍无行为级测试**。`Chat.Tests` 虽已从 0 填到 80 条，但 plain 模式目前只有
+
+   **当前进度（2026-09-28 二次 grep 核对）**：
+   - ✅ `IReplayGuard.cs` —— 接口已定义（`bool TryAccept(envelope, out string? reason)`）
+   - ✅ `src/P2PChat.Chat/Routing/MessageReplayGuard.cs` —— **实现已落地**（`sealed class ... : IReplayGuard`）
+   - ✅ **已接入** `MessageRouter` —— `IReplayGuard` 是 `MessageRouter` 的**必填构造参数**
+     （刻意不给默认值 `= null`，否则漏装配会静默变成无防护）
+   - ✅ **配置接线已落地** —— `Program.cs` 从 `P2PChat:ReplayMaxAgeSeconds` 读取（默认 3600）并注册
+     `IReplayGuard`；TUI 自检块有对应显示行
+   - ✅ **e2e 断言 A33 / A34 + E7 / E8 已落地**（`scripts/`）
+   - ❌ **`tests/**` 仍在红** —— chattests-filler 正在修 `NodeHarness` 的连接装饰器钩子
+     （当前 1 个 error：`DecoratingTcpTransport` 未找到，在飞中间态）
+
+   > ⚠️ **因此本项仍不能关闭。** 四条判据里**第 2 条（测试五类且全绿）尚未满足**。
+   > 「实现已落地 + 能 build」不等于「防护被验证有效」——
+   > 后者需要测试全绿 **且** 按 §5 步骤 5 手动打过一遍。
+   > 此时打勾正是本轮反复出现的那个错误：**无实测证据的「已完成」比「未完成」更有害。**
+
+   **设计要点**（决定实现合不合约，写在这里以免收口时只看结果不看契约）：
+   - 重放键用**已被签名覆盖的 `MessageId`**（16B Guid，天然唯一）。
+     **不要用 `SequenceNumber`** —— 两条硬理由见 §5.5，其中「同一节点有两个独立序号计数器」
+     意味着它**在本协议里根本不是唯一键**。
+   - 契约刻意与密码学验证**分离**：`MessageRouter.VerifyEnvelope` 是**纯密码学、无状态、可重复调用**的
+     函数，`MessageSigningTests` 大量直接调用它。把有状态策略塞进去会让「同一信封校验两次」第二次失败，
+     连带炸红一批语义正确的测试。
+   - 内存有**两个**有界维度，缺一不可：
+     ① 每桶 **1024** 条环形缓冲（`MessageId` 去重表）；
+     ② 「对端 → 桶」字典封顶 `MaxTrackedPeers = 512` + LRU 淘汰（**最坏 8 MiB**）。
+     只有 ① 的话对端数无界增长；只有 ② 的话单桶内的 `MessageId` 无界增长。
+
+   **关闭本项的判据**（四条全绿才可移到 §8.1）：
+   1. 实现类存在并已接入 `MessageRouter` 入站路径（在**验签之后**、投递事件之前）
+   2. `dotnet test` 有针对**串行重放**、**并发重放**、**过期**、**未来**、**不误杀**五类的用例且全绿
+   3. 按 §5 步骤 5 手动打过一遍（不只看测试名）
+   4. 残余风险**原样保留**在 §8.1，不得在关闭时被悄悄抹掉：
+      - `MessageId` 缓存被**环形淘汰**后、**且仍在时间窗内**的重放**仍可能通过**
+      - `ReplayMaxAgeSeconds <= 0` 时**完全无防护**
+5. ⚪ **`P2PChatTui` 仍无行为级测试**。`Chat.Tests` 虽已从 0 填到 80 条，但 plain 模式目前只有
    **结构契约**测试 + e2e 端到端覆盖，没有驱动真实 `P2PChatTui` 主循环的行为测试。
-5. ⚪ **本轮全部改动尚未提交**（`git status` 90 条）。这是接手第一件事，见 §5 步骤 1。
+6. ⚪ **本轮全部改动尚未提交**（`git status` 90 条）。这是接手第一件事，见 §5 步骤 1。
    提交前请连同 §3.1 的 AOT 结论与 exe SHA256 一并复核。
-6. ⚪ **`NodeInfo.ExternalEndPoint` 是死字段**（零赋值点）。
+7. ⚪ **`NodeInfo.ExternalEndPoint` 是死字段**（零赋值点）。
    阶段 2.2 的回填实际落在 `AnnouncedPeer.ExternalEndPoint`（私有 record struct，经 `ListAnnouncedPeers()` 暴露），
    **而非** `NodeInfo.ExternalEndPoint`。
    **但经核实这不影响建连** —— `announce_peer` 分支已用「**UDP 包源 IP + 宣告的 TCP 端口**」拼出
@@ -406,11 +560,11 @@ pwsh -NoProfile -File scripts\e2e-verify.ps1 -SelfTestWaitMs 20000
      影响**仅限于「其它 P2PChat 节点无法主动向我们发 DHT 查询」**，
      **不影响建连** —— 我们是通过 `announce_peer` 主动把自己的记录推进对端缓存的，
      对端拿到的 `EndPoint` 已经是可直连的公网地址。
-7. ⚪ **阶段 2.4（中继 / 打洞）未做** —— REPAIR-PLAN 标注为可选。
-8. ⚪ **`<program dir>/data/` 下的既有数据永不迁移**，仅新路径 `~/.p2pc/` 生效。
-9. ⚪ **发布配置与 `Directory.Build.props` 重复声明 TFM**，可能漂移。
+8. ⚪ **阶段 2.4（中继 / 打洞）未做** —— REPAIR-PLAN 标注为可选。
+9. ⚪ **`<program dir>/data/` 下的既有数据永不迁移**，仅新路径 `~/.p2pc/` 生效。
+10. ⚪ **发布配置与 `Directory.Build.props` 重复声明 TFM**，可能漂移。
 
-### 8.1 本轮已关闭的项（不再占用上面的清单）
+### 8.1 已关闭的项（不再占用上面的清单）
 
 | 项 | 结论 | 证据 |
 |---|---|---|
@@ -447,3 +601,7 @@ pwsh -NoProfile -File scripts\e2e-verify.ps1 -SelfTestWaitMs 20000
 - **阶段 4.4（真实发现测试）**：新增 `tests/P2PChat.Networking.Tests/RealDiscoveryTests.cs`，拉起两个**真实** `MainlineDhtService` 跑通 `find_node → announce_peer → get_peers`，**不预置任何发现路径**。
 - **阶段 4.5（KnownDefects 清理）**：6 个 `SkipException` 动态跳过分支删除，测试重写为真实断言的回归守卫。
 - **阶段 4.6（e2e 明文断言）**：`e2e-verify.ps1` Phase 2 新增 A29–A32（两实例就绪 / 接收端日志含明文 / 接收端 StdOut+Log 含明文 / 发送端自身不含明文）。**代码已落地，未复跑**。
+
+
+
+

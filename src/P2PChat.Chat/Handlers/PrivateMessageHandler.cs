@@ -1,5 +1,4 @@
 using System.Text;
-using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using P2PChat.Core.Abstractions;
 using P2PChat.Core.Enums;
@@ -9,26 +8,32 @@ namespace P2PChat.Chat.Handlers;
 
 /// <summary>
 /// 私聊消息处理器
+/// <para>
+/// <b>本类不再持有任何 <c>Channel&lt;ChatMessageEvent&gt;</c></b>，也<b>不再暴露</b>
+/// <c>OnMessageReceived</c>。解密出的事件一律经 <see cref="IChatEventPublisher"/> 投递到
+/// <c>ChatService</c> 持有的那唯一一条事件流 —— 那才是 UI 真正消费的那条。
+/// 见 REPAIR-PLAN B3 与 <see cref="IChatEventPublisher"/> 的「唯一来源铁律」。
+/// </para>
 /// </summary>
 public class PrivateMessageHandler : IMessageHandler<TextMessage>
 {
     private readonly IEncryptionService _encryption;
     private readonly IKeyStore _keyStore;
+    private readonly IChatEventPublisher _events;
     private readonly ILogger<PrivateMessageHandler> _logger;
-    private readonly Channel<ChatMessageEvent> _messageChannel;
 
     public MessageType MessageType => MessageType.PrivateText;
-    public IAsyncEnumerable<ChatMessageEvent> OnMessageReceived => _messageChannel.Reader.ReadAllAsync();
 
     public PrivateMessageHandler(
         IEncryptionService encryption,
         IKeyStore keyStore,
+        IChatEventPublisher events,
         ILogger<PrivateMessageHandler> logger)
     {
         _encryption = encryption;
         _keyStore = keyStore;
+        _events = events ?? throw new ArgumentNullException(nameof(events));
         _logger = logger;
-        _messageChannel = Channel.CreateUnbounded<ChatMessageEvent>();
     }
 
     public async Task HandleAsync(
@@ -80,7 +85,20 @@ public class PrivateMessageHandler : IMessageHandler<TextMessage>
             IsOutgoing = false
         };
 
-        await _messageChannel.Writer.WriteAsync(chatEvent, ct);
+        // 投递到 UI 消费的那条事件流。写入失败不能吞掉——但也不能让一条显示失败
+        // 变成一次路由异常：记 Error 后正常返回，消息本身已被正确解密与处理。
+        try
+        {
+            await _events.PublishAsync(chatEvent, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "私聊消息已解密但投递到事件流失败（用户可能看不到这条消息）: {Sender}, MessageId={MessageId}",
+                senderId.ToHexString()[..8], message.MessageId);
+            return;
+        }
+
         _logger.LogDebug("私聊消息已处理: {Sender} -> {Text}",
             senderId.ToHexString()[..8], plainText[..Math.Min(20, plainText.Length)]);
     }

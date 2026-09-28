@@ -222,7 +222,7 @@ public class GroupChatIntegrationTests
         const string text = "群消息：大家好，这是一条群聊内容 🎉";
         await alice.Group.SendGroupMessageAsync(group.GroupId, text);
 
-        var received = await ReceiveOneAsync(bob.GroupHandler.OnMessageReceived);
+        var received = await ReceiveOneAsync(bob.IncomingMessages);
 
         received.Content.ShouldBe(text);
         received.IsGroup.ShouldBeTrue();
@@ -253,7 +253,7 @@ public class GroupChatIntegrationTests
         var got = false;
         await Should.ThrowAsync<OperationCanceledException>(async () =>
         {
-            await foreach (var _ in bob.GroupHandler.OnMessageReceived.WithCancellation(cts.Token))
+            await foreach (var _ in bob.IncomingMessages.WithCancellation(cts.Token))
             {
                 got = true;
                 break;
@@ -423,7 +423,7 @@ public class GroupChatIntegrationTests
         const string text = "群消息：大家好，这是一条加密端到端消息 🎉🔒";
         await alice.Group.SendGroupMessageAsync(group.GroupId, text);
 
-        var received = await ReceiveOneAsync(bob.GroupHandler.OnMessageReceived);
+        var received = await ReceiveOneAsync(bob.IncomingMessages);
 
         received.Content.ShouldBe(text, "接收端解密还原的明文必须与发送端一致");
         received.IsGroup.ShouldBeTrue();
@@ -507,7 +507,7 @@ public class GroupChatIntegrationTests
         var got = false;
         await Should.ThrowAsync<OperationCanceledException>(async () =>
         {
-            await foreach (var _ in bob.GroupHandler.OnMessageReceived.WithCancellation(cts.Token))
+            await foreach (var _ in bob.IncomingMessages.WithCancellation(cts.Token))
             {
                 got = true;
                 break;
@@ -544,7 +544,7 @@ public class GroupChatIntegrationTests
         var got = false;
         await Should.ThrowAsync<OperationCanceledException>(async () =>
         {
-            await foreach (var _ in bob.GroupHandler.OnMessageReceived.WithCancellation(cts.Token))
+            await foreach (var _ in bob.IncomingMessages.WithCancellation(cts.Token))
             {
                 got = true;
                 break;

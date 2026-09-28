@@ -85,7 +85,10 @@ public class KnownDefectsTests
         var content = Convert.ToBase64String(
             encryption.Encrypt(Encoding.UTF8.GetBytes(plaintext), sessionKey));
 
-        var handler = new PrivateMessageHandler(encryption, keyStore, NullLogger<PrivateMessageHandler>.Instance);
+        // handler 不再自建事件通道，输出统一走 IChatEventPublisher —— 用捕获型发布器断言。
+        var events = new CapturingChatEventPublisher();
+        var handler = new PrivateMessageHandler(
+            encryption, keyStore, events, NullLogger<PrivateMessageHandler>.Instance);
         await handler.HandleAsync(
             new TextMessage { SenderId = senderId, ConversationId = "c", Content = content },
             new FakeTcpConnection(),
@@ -94,7 +97,7 @@ public class KnownDefectsTests
         ChatMessageEvent? received = null;
         using (var cts = new CancellationTokenSource(5000))
         {
-            await foreach (var evt in handler.OnMessageReceived.WithCancellation(cts.Token))
+            await foreach (var evt in events.Events.WithCancellation(cts.Token))
             {
                 received = evt;
                 break;
@@ -325,7 +328,7 @@ public class KnownDefectsTests
         }
 
         // (3) 接收端必须解密成功，且内容与原文逐字节一致
-        var received = await ReceiveOneAsync(bob.PrivateHandler.OnMessageReceived);
+        var received = await ReceiveOneAsync(bob.IncomingMessages);
         received.Content.ShouldBe(plaintext);
         received.IsOutgoing.ShouldBeFalse();
         Encoding.UTF8.GetBytes(received.Content).ShouldBe(plaintextUtf8);

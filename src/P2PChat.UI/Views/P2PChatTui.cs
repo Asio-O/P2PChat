@@ -10,6 +10,55 @@ using static P2PChat.UI.Views.ConsoleScreen;
 namespace P2PChat.UI.Views;
 
 /// <summary>
+/// 入站重放防护的<b>可见状态快照</b> —— 由 <c>Program.cs</c> 在解析
+/// <c>P2PChat:ReplayMaxAgeSeconds</c> 之后构造，注入 TUI 供自检块显示。
+/// <para>
+/// 刻意做成<b>不可变值</b>，而不是让 UI 去问 <c>IReplayGuard</c>：
+/// 该接口属于 Core 且只暴露 <c>TryAccept(MessageEnvelope, out string?)</c>，
+/// 没有任何策略可见性 —— 为了「自检块显示一行」去给安全边界接口加展示成员是错的。
+/// 类型放在本文件内，是因为 <c>P2PChat.UI</c> 只引用 <c>P2PChat.Core</c>（不引用 Chat），
+/// 而 <c>Program.cs</c>（App）引用 UI，可以直接构造它并注册进 DI。
+/// </para>
+/// <para>
+/// 对应 REPAIR-PLAN 阶段 2.3 的「降级要明示，不要静默失败」：用户必须能一眼看出
+/// 「超过 N 分钟的消息会被丢弃」，以及在时钟严重偏移的机器上是否已关掉这个时间窗。
+/// </para>
+/// </summary>
+/// <param name="TimeWindowEnabled">时间窗是否启用。<c>false</c> 表示
+/// <c>P2PChat:ReplayMaxAgeSeconds &lt;= 0</c>，即逃生阀已打开。</param>
+/// <param name="MaxAge">允许的最大消息年龄。<see cref="TimeWindowEnabled"/> 为
+/// <c>false</c> 时该值无意义，但仍原样携带以便日志/诊断。</param>
+public sealed record ReplayGuardStatus(bool TimeWindowEnabled, TimeSpan MaxAge)
+{
+    /// <summary>自检块显示用的「已启用 / 已关闭」一句话（不含字段名前缀）。</summary>
+    public string Describe()
+        => TimeWindowEnabled
+            ? $"已启用 (最大消息年龄 {FormatAge(MaxAge)})"
+            : "已关闭 —— 超过最大年龄的消息会被接受，请确认这是有意为之";
+
+    /// <summary>
+    /// 把时间窗长度格式化成人类可读文本：小于 1 分钟用秒，否则用分钟；
+    /// 达到 1 天才改用小时，避免出现「1440 分钟」这种没人愿意读的数字。
+    /// <para>
+    /// 默认值 3600s 因此显示为「60 分钟」—— 与 REPAIR-PLAN 阶段 2.3 的示例文案一致，
+    /// 也让 e2e / config-probe 的断言可以按这个字面量写。
+    /// </para>
+    /// </summary>
+    public static string FormatAge(TimeSpan age)
+    {
+        if (age.TotalSeconds < 60) return $"{age.TotalSeconds:0.##} 秒";
+        if (age.TotalDays >= 1)
+        {
+            var hours = age.TotalHours;
+            return hours % 1 == 0 ? $"{hours:0} 小时" : $"{hours:0.#} 小时";
+        }
+        var minutes = age.TotalMinutes;
+        return minutes % 1 == 0 ? $"{minutes:0} 分钟" : $"{minutes:0.#} 分钟";
+    }
+}
+
+
+/// <summary>
 /// P2PChat 控制台界面 —— 零依赖自绘 UI（不使用任何第三方 TUI 框架，兼容 Native-AOT）
 /// 布局：标题栏 / 左栏联系人(含在线状态) / 右栏当前会话聊天记录 / 底部输入行 / 状态栏
 /// </summary>
@@ -22,7 +71,8 @@ public sealed class P2PChatTui(
     IMessageRouter router,
     IKeyStore keyStore,
     IEncryptionService encryption,
-    ILogger<P2PChatTui> logger) : IDisposable
+    ILogger<P2PChatTui> logger,
+    ReplayGuardStatus replayGuard) : IDisposable
 {
     private const int MaxHistory = 500;                    // 每个会话保留的历史行数
     private const string SystemConversation = "__system__";
@@ -149,6 +199,10 @@ public sealed class P2PChatTui(
             _ => natState.ToString()
         };
         Console.WriteLine($"UPnP 状态:  {natState} ({natText})");
+        // 入站重放防护（REPAIR-PLAN 阶段 2.3：降级要明示）。与「宣告状态」「UPnP 状态」同风格，
+        // 冒号后补 3 个空格对齐到第 12 列。状态是注入的不可变值（ReplayGuardStatus），
+        // 不是现场探测 —— 配置在启动时解析一次，这里如实展示。
+        Console.WriteLine($"重放防护:   {replayGuard.Describe()}");
         Console.WriteLine("自检完成:   OK");
         Console.Out.Flush();
     }
@@ -751,7 +805,18 @@ public sealed class P2PChatTui(
     {
         while (_inbox.TryDequeue(out var item))
         {
-            if (_plainMode) Console.WriteLine(item.Cid.Length > 0 ? $"[{Short(item.Cid)}] {item.Text}" : item.Text);
+            if (_plainMode)
+            {
+                Console.WriteLine(item.Cid.Length > 0 ? $"[{Short(item.Cid)}] {item.Text}" : item.Text);
+                // plain 模式的**存在意义**就是让脚本（e2e-verify.ps1、CI、管道）抓取输出。
+                // 而 stdout 被重定向时 Console.Out 是**带缓冲**的：脚本在读到期望内容后
+                // 直接 Kill 进程，缓冲区里还没落盘的聊天事件行就**整个丢失**。
+                // 症状与「消息没被渲染」几乎一样（Serilog 文件日志里有、stdout 里没有），
+                // 极具误导性。plain 模式本就是机器消费路径，逐行 flush 的开销可以接受。
+                // （注：2026-09-28 首次加这行时，我把它误判成 A33 失败的原因；真实原因是
+                //   handler 的事件压根没进 `_inbox`。修复见 IChatEventPublisher。此处的 flush 独立成立。）
+                Console.Out.Flush();
+            }
             else AddMessage(item.Text, item.Cid.Length > 0 ? item.Cid : null);
         }
     }

@@ -48,7 +48,7 @@ public class MessageSigningTests
         const string text = "签名往返：你好 Bob 🚀";
         await alice.Chat.SendPrivateMessageAsync(bob.LocalNode.NodeId, text);
 
-        var received = await ReceiveOneAsync(bob.PrivateHandler.OnMessageReceived);
+        var received = await ReceiveOneAsync(bob.IncomingMessages);
         received.Content.ShouldBe(text);
         received.IsOutgoing.ShouldBeFalse();
 
@@ -94,7 +94,7 @@ public class MessageSigningTests
         var got = false;
         await Should.ThrowAsync<OperationCanceledException>(async () =>
         {
-            await foreach (var _ in bob.PrivateHandler.OnMessageReceived.WithCancellation(cts.Token))
+            await foreach (var _ in bob.IncomingMessages.WithCancellation(cts.Token))
             {
                 got = true;
                 break;
@@ -144,7 +144,7 @@ public class MessageSigningTests
         var got = false;
         await Should.ThrowAsync<OperationCanceledException>(async () =>
         {
-            await foreach (var _ in bob.PrivateHandler.OnMessageReceived.WithCancellation(cts.Token))
+            await foreach (var _ in bob.IncomingMessages.WithCancellation(cts.Token))
             {
                 got = true;
                 break;
@@ -306,7 +306,7 @@ public class MessageSigningTests
 
         // Step 1：触发一次正常 ECDH + 签名私聊，让 bob 持有 alice 的会话密钥。
         await alice.Chat.SendPrivateMessageAsync(bob.LocalNode.NodeId, "首条消息");
-        var firstReceived = await ReceiveOneAsync(bob.PrivateHandler.OnMessageReceived);
+        var firstReceived = await ReceiveOneAsync(bob.IncomingMessages);
         firstReceived.Content.ShouldBe("首条消息");
 
         // Step 2：构造一条冒名 envelope —— SenderId 是 bob 的，但 SenderPublicKey 是 alice 的
@@ -340,7 +340,7 @@ public class MessageSigningTests
         var got = false;
         await Should.ThrowAsync<OperationCanceledException>(async () =>
         {
-            await foreach (var _ in bob.PrivateHandler.OnMessageReceived.WithCancellation(cts.Token))
+            await foreach (var _ in bob.IncomingMessages.WithCancellation(cts.Token))
             {
                 got = true;
                 break;

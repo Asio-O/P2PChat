@@ -55,7 +55,8 @@ public class MessageHandlerTests
         var ks = NewKeyStore();
         var sender = NodeId.CreateRandom();
         ks.SetSessionKey(sender, GroupKey);
-        var handler = new PrivateMessageHandler(Crypto, ks, NullLogger<PrivateMessageHandler>.Instance);
+        var events = new CapturingChatEventPublisher();
+        var handler = new PrivateMessageHandler(Crypto, ks, events, NullLogger<PrivateMessageHandler>.Instance);
 
         const string plain = "你好，加密私聊";
         await handler.HandleAsync(new TextMessage
@@ -66,7 +67,7 @@ public class MessageHandlerTests
             IsGroup = false
         }, new FakeTcpConnection(), AnyEnvelope(sender));
 
-        var evt = await AsyncStream.FirstAsync(handler.OnMessageReceived);
+        var evt = await AsyncStream.FirstAsync(events.Events);
         evt.Content.ShouldBe(plain);
         evt.SenderId.ShouldBe(sender);
         evt.ConversationId.ShouldBe("conv-1");
@@ -79,7 +80,8 @@ public class MessageHandlerTests
     {
         var ks = NewKeyStore();
         var sender = NodeId.CreateRandom();
-        var handler = new PrivateMessageHandler(Crypto, ks, NullLogger<PrivateMessageHandler>.Instance);
+        var events = new CapturingChatEventPublisher();
+        var handler = new PrivateMessageHandler(Crypto, ks, events, NullLogger<PrivateMessageHandler>.Instance);
 
         await handler.HandleAsync(new TextMessage
         {
@@ -89,8 +91,7 @@ public class MessageHandlerTests
             IsGroup = false
         }, new FakeTcpConnection(), AnyEnvelope(sender));
 
-        await Should.ThrowAsync<TimeoutException>(
-            () => AsyncStream.FirstAsync(handler.OnMessageReceived, timeoutMs: 300));
+        events.Published.ShouldBeEmpty("缺少会话密钥的私聊不得投递任何事件 —— 否则用户会看到一条无法解密的垃圾");
     }
 
     [Fact]
@@ -99,7 +100,8 @@ public class MessageHandlerTests
         var ks = NewKeyStore();
         var sender = NodeId.CreateRandom();
         ks.SetSessionKey(sender, new byte[16]);
-        var handler = new PrivateMessageHandler(Crypto, ks, NullLogger<PrivateMessageHandler>.Instance);
+        var events = new CapturingChatEventPublisher();
+        var handler = new PrivateMessageHandler(Crypto, ks, events, NullLogger<PrivateMessageHandler>.Instance);
 
         await handler.HandleAsync(new TextMessage
         {
@@ -109,8 +111,7 @@ public class MessageHandlerTests
             IsGroup = false
         }, new FakeTcpConnection(), AnyEnvelope(sender));
 
-        await Should.ThrowAsync<TimeoutException>(
-            () => AsyncStream.FirstAsync(handler.OnMessageReceived, timeoutMs: 300));
+        events.Published.ShouldBeEmpty("会话密钥长度非法的私聊不得投递任何事件");
     }
 
     [Fact]
@@ -119,7 +120,8 @@ public class MessageHandlerTests
         var ks = NewKeyStore();
         var sender = NodeId.CreateRandom();
         ks.SetSessionKey(sender, GroupKey);
-        var handler = new PrivateMessageHandler(Crypto, ks, NullLogger<PrivateMessageHandler>.Instance);
+        var events = new CapturingChatEventPublisher();
+        var handler = new PrivateMessageHandler(Crypto, ks, events, NullLogger<PrivateMessageHandler>.Instance);
 
         await handler.HandleAsync(new TextMessage
         {
@@ -129,8 +131,7 @@ public class MessageHandlerTests
             IsGroup = false
         }, new FakeTcpConnection(), AnyEnvelope(sender));
 
-        await Should.ThrowAsync<TimeoutException>(
-            () => AsyncStream.FirstAsync(handler.OnMessageReceived, timeoutMs: 300));
+        events.Published.ShouldBeEmpty("Content 是明文的私聊解密必失败，必须丢弃且不得原样显示给用户");
     }
 
     #endregion
@@ -143,7 +144,8 @@ public class MessageHandlerTests
         var ks = NewKeyStore();
         var sender = NodeId.CreateRandom();
         ks.SetGroupKey("g-1", GroupKey);
-        var handler = new GroupMessageHandler(Crypto, ks, NullLogger<GroupMessageHandler>.Instance);
+        var events = new CapturingChatEventPublisher();
+        var handler = new GroupMessageHandler(Crypto, ks, events, NullLogger<GroupMessageHandler>.Instance);
 
         const string plain = "群里的加密消息";
         await handler.HandleAsync(new TextMessage
@@ -154,7 +156,7 @@ public class MessageHandlerTests
             IsGroup = true
         }, new FakeTcpConnection(), AnyEnvelope(sender));
 
-        var evt = await AsyncStream.FirstAsync(handler.OnMessageReceived);
+        var evt = await AsyncStream.FirstAsync(events.Events);
         evt.Content.ShouldBe(plain);
         evt.SenderId.ShouldBe(sender);
         evt.ConversationId.ShouldBe("g-1");
@@ -167,7 +169,8 @@ public class MessageHandlerTests
     {
         var ks = NewKeyStore();
         ks.SetGroupKey("g-1", GroupKey);
-        var handler = new GroupMessageHandler(Crypto, ks, NullLogger<GroupMessageHandler>.Instance);
+        var events = new CapturingChatEventPublisher();
+        var handler = new GroupMessageHandler(Crypto, ks, events, NullLogger<GroupMessageHandler>.Instance);
 
         await handler.HandleAsync(new TextMessage
         {
@@ -177,8 +180,7 @@ public class MessageHandlerTests
             IsGroup = true
         }, new FakeTcpConnection(), AnyEnvelope(NodeId.CreateRandom()));
 
-        await Should.ThrowAsync<TimeoutException>(
-            () => AsyncStream.FirstAsync(handler.OnMessageReceived, timeoutMs: 300));
+        events.Published.ShouldBeEmpty("Content 是明文的群消息解密必失败 —— 群聊同样要求端到端加密，不得明文显示");
     }
 
     [Fact]
@@ -186,7 +188,8 @@ public class MessageHandlerTests
     {
         var ks = NewKeyStore();
         ks.SetGroupKey("g-1", GroupKey);
-        var handler = new GroupMessageHandler(Crypto, ks, NullLogger<GroupMessageHandler>.Instance);
+        var events = new CapturingChatEventPublisher();
+        var handler = new GroupMessageHandler(Crypto, ks, events, NullLogger<GroupMessageHandler>.Instance);
 
         await handler.HandleAsync(new TextMessage
         {
@@ -196,15 +199,15 @@ public class MessageHandlerTests
             IsGroup = true
         }, new FakeTcpConnection(), AnyEnvelope(NodeId.CreateRandom()));
 
-        await Should.ThrowAsync<TimeoutException>(
-            () => AsyncStream.FirstAsync(handler.OnMessageReceived, timeoutMs: 300));
+        events.Published.ShouldBeEmpty("用别的群密钥加密的群消息认证必失败，必须丢弃");
     }
 
     [Fact]
     public async Task 群消息_缺少群密钥时丢弃_不上报任何事件()
     {
         var ks = NewKeyStore();
-        var handler = new GroupMessageHandler(Crypto, ks, NullLogger<GroupMessageHandler>.Instance);
+        var events = new CapturingChatEventPublisher();
+        var handler = new GroupMessageHandler(Crypto, ks, events, NullLogger<GroupMessageHandler>.Instance);
 
         await handler.HandleAsync(new TextMessage
         {
@@ -214,8 +217,7 @@ public class MessageHandlerTests
             IsGroup = true
         }, new FakeTcpConnection(), AnyEnvelope(NodeId.CreateRandom()));
 
-        await Should.ThrowAsync<TimeoutException>(
-            () => AsyncStream.FirstAsync(handler.OnMessageReceived, timeoutMs: 300));
+        events.Published.ShouldBeEmpty("缺少群密钥的群消息不得投递任何事件");
     }
 
     #endregion
