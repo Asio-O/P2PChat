@@ -321,9 +321,9 @@ public sealed class P2PChatTui(
     /// 必须与 <c>ChatService.SendPrivateMessageAsync</c> 使用同一个函数、
     /// 且本机身份必须取自<b>同一个来源</b>，否则接收到的消息会落进一个 UI 选不中的会话桶。
     /// <para>
-    /// ⚠️ 这里此前取 <c>dhtService.LocalNode.NodeId</c>，而 <c>ChatService</c> 取
-    /// <c>keyStore.GetOrCreateIdentity().NodeId</c> —— 两个<b>独立真相源</b>。
-    /// <c>NodeInfo</c> 是 record + init，LocalNode 里的 NodeId 是<b>启动时派生后冻结</b>的值；
+    /// ⚠️ 这里此前取 dhtService 的 LocalNode.NodeId（冻结的独立真相源），而 ChatService 取
+    /// keyStore 的现读身份 —— 两者分叉后消息会落进 UI 永远选不中的会话桶。
+    /// NodeInfo 是 record + init，LocalNode 里的 NodeId 是<b>启动时派生后冻结</b>的值；
     /// keyStore 则是<b>发送时现读</b>。只要身份在进程内变化过（例如身份文件被重新生成，
     /// 或任何代码用另一个 keyStore 构造了 DHT LocalNode），两者就分叉。
     /// </para>
@@ -948,7 +948,7 @@ public sealed class P2PChatTui(
         var online = allNodes.Count(n => n.State == PeerState.Online);
         int contacts;
         lock (_sync) contacts = _contacts.Count;
-        _dhtStatus = $"DHT: {online}/{allNodes.Count} | ID:{Short(dhtService.LocalNode.NodeId.ToHexString(), 6)} | 联系人:{contacts}";
+        _dhtStatus = $"DHT: {online}/{allNodes.Count} | ID:{Short(keyStore.GetOrCreateIdentity().NodeId.ToHexString(), 6)} | 联系人:{contacts}";
         MarkDirty();
     }
     /// <summary>后台循环 1：接收聊天消息 → 入队给 UI 线程渲染</summary>

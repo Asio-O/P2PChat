@@ -22,6 +22,7 @@
 >
 > 本文 §四「需要确认的一个前提」问的是：**两台目标设备是同一局域网，还是分别在各自的家宽 / 移动网络？**
 > 该问题自 2026-09-20 提出后一直**未获用户答复**（同一问题在 `HANDOFF.md` §8 遗留 #1 中跟踪，标记为「🔴 阻塞验收」）。
+> **截至 2026-09-28 已向用户询问 5 次仍未获答复。** 次数本身是诚实信号，本文档不修饰、不淡化。
 > 它决定阶段 2 是硬需求还是可以降级的锦上添花。
 >
 > 阶段 2 之所以能在答案未知的情况下标 ✅，是因为实现走了**尽力而为**路线：
@@ -36,8 +37,27 @@
 | **阶段 2** 穿透 NAT | ✅ **已完成（2.4 除外）**（2026-09-21） | UPnP IGD（裸 SSDP + SOAP，刻意不用 COM 以保 AOT）TCP/UDP 同端口映射、退出时释放租约、TUI 显式降级提示。**2.4 中继 / 打洞未做**（原标注为可选）。跨网络建连链**已闭合** —— `announce_peer` 用「UDP 包源 IP + 宣告的 TCP 端口」直接拼出公网可达的 `NodeInfo.EndPoint`，见「阶段 2.2 / 2.2b」。决策：[`notes/implemented/bug-fix/2026-09-21-nat-traversal.zh.md`](notes/implemented/bug-fix/2026-09-21-nat-traversal.zh.md) |
 | **阶段 3** 安全与完整性 | ✅ **已完成**（2026-09-21） | 3.1 群消息 AES-256-GCM 加密 / 3.2 长期 ECDSA 消息签名（含四道入口关卡）/ 3.3 群组元数据持久化 / 3.4 文件分块改用 `state.ChunkSize`。见「阶段 3 实施记录」。决策：[群消息加密](notes/implemented/bug-fix/2026-09-21-group-message-encryption.zh.md)、[消息签名](notes/implemented/bug-fix/2026-09-21-message-signing.zh.md)、[群元数据持久化](notes/implemented/bug-fix/2026-09-21-group-metadata-persistence.zh.md)、[文件分块大小](notes/implemented/bug-fix/2026-09-21-filetransfer-chunksize.zh.md) |
 | **阶段 4.1–4.3** 测试策略（防复发部分） | ✅ **已完成** | `NodeHarness.SenderId` 已改为复用生产代码的 `KeyPair.NodeId`；新增 25 条守卫断言 |
-| **阶段 4.4–4.6** 测试策略（真实发现 / e2e） | ✅ **已完成**（2026-09-28 收口） | 4.4 `RealDiscoveryTests` 真实 KRPC 闭环 / 4.5 `KnownDefectsTests` 6 条回归守卫（死 skip 分支已删）/ 4.6 `e2e-verify.ps1` 明文往返断言 A29–A32 + A29a/A29b/A33/A34。**最新 e2e 实测 `PASS=41 / FAIL=0 / SKIP=0`，退出码 0**（起始基线 32/5）。⚠️ **上一轮记的 `PASS=39/FAIL=0` 对「消息显示」是假绿灯**，见下方与 `HANDOFF.md` §8.1.2 |
-| 各阶段对应的 Agent Note | ✅ 阶段 0–3 已补 | 阶段 0–3 + `/connect` 共 **10 组**（`implemented/bug-fix` ×8 + `implemented/feature` ×2）；全库 `notes/` 下已无 `Status: proposed` |
+| **阶段 4.4–4.6** 测试策略（真实发现 / e2e） | ✅ **已完成**（2026-09-28 收口） | 4.4 `RealDiscoveryTests` 真实 KRPC 闭环 / 4.5 `KnownDefectsTests` 回归守卫 / 4.6 `e2e-verify.ps1` 明文往返断言 A29–A32 + A29a/A29b/A33/A34/**A35（场景三 `/connect` 双向端到端）**。**最新 e2e 实测 `PASS=42 / FAIL=0 / SKIP=0`，退出码 0**（起始基线 32/5，Lead 亲自实跑）。⚠️ **曾记的 `PASS=39/FAIL=0` 对「消息显示」是假绿灯**，见 `HANDOFF.md` §8.1.2 |
+| 各阶段对应的 Agent Note | ✅ 阶段 0–3 已补 | 阶段 0–3 + `/connect` 共 **11 组**；全库 `notes/` 下已无 `Status: proposed` |
+
+**2026-09-28 收口轮新增/确认的完成项**（均为本轮或上一轮实测落地，细节见 [HANDOFF.md](HANDOFF.md)）：
+
+| 项 | 状态 | 一句话 |
+|---|---|---|
+| 入站重放防护 | ✅ 已关闭 | 重放键为已被签名覆盖的 `MessageId`；**五条残余风险必须随部署一起读**，见 `HANDOFF.md` §8.1.1 |
+| 事件流唯一（`IChatEventPublisher`） | ✅ 已修 | 修「收到的消息从不显示」—— B3 同类缺陷复发，`src` 内该 Channel 由 3 处降为 1 处 |
+| 载荷 / 信封身份一致性检查 | ✅ 已加 | 跨 `MessageRouter` 加载荷 `SenderId` 必须等于信封 `SenderId`；`FileTransferService` 身份已与信封同源（task-28） |
+| **自报监听端点**（`SenderListenEndPoint`） | ✅ 已加 | `/connect` 由单向变双向：发起方自报监听端点（载荷字段、被签名覆盖），应答侧据此登记反向可达的静态对端。**不用 `RemoteEndPoint`** —— 那是 ephemeral 临时端口，见 `HANDOFF.md` §7.5 |
+| 三场景部署指引 | ✅ 已加 | 逐场景给出「是否开箱可用 / 必须做什么」；**把 `/add` 当可靠路径，把 DHT 自动发现当便利功能** |
+| A35（场景三 e2e 证明） | ✅ 已加 | `/connect` 双向首次获得**端到端**证明（此前只有集成测试，见 B7 教训段） |
+
+> ⚠️ **自动发现的真实边界**（doc-writer 核实，结构性限制，**不是待修的 bug**）：
+> 公共 BitTorrent 节点返回的 `get_peers` 响应是 6 字节 `values`（仅 IP+port，无 NodeId），
+> `MainlineDhtService` 会把**响应者自己**的 NodeId 盖在这些条目上，而解析处要求
+> `peerId.Equals(targetId)`（`MainlineDhtService.cs` 的 `values` 分支与 `ResolveViaGetPeersAsync`）。
+> 两者相加 ⇒ **公共节点返回的响应里永远没有可用的 P2PChat 节点**。
+> **P2PChat 的 `p2pc_peers` 扩展字段只在已经能找到至少一个 P2PChat 节点时才有意义。**
+> 影响：两台从未联系过的节点**不能**仅靠公共引导节点自动互相发现 ⇒ `/add` 才是可靠路径。
 
 阶段 0 的提交为 `bab0635`（含三份 Agent Note 与本文档）；阶段 1–3 与阶段 4 的代码**目前仍在工作区未提交**，
 提交号待收口时补（见 [HANDOFF.md](HANDOFF.md)）。
@@ -132,22 +152,26 @@
 | 4.5 | 清理 `KnownDefectsTests.cs`：删除 6 个 `SkipException` 动态跳过分支，以及其中引用**已不存在代码行号**的失效文案；6 条测试重写为「回归守卫」真实断言 | `tests/P2PChat.Integration.Tests/KnownDefectsTests.cs`，6 条：`:51` / `:76` / `:117` / `:223` / `:284` / `:367` | 6 条全 pass，**0 skip**（改回旧实现任一条即变红） |
 | 4.6 | e2e 明文往返断言：Phase 2 拉起 nodeA2 / nodeB2 两实例互发一条带随机明文的消息，断言接收端日志出现该明文 | `scripts/e2e-verify.ps1` A29 / A29a / A29b / A30 / A31 / A32 —— A29a 守「预置的 `contacts.json` 启动后仍在」、A29b 守「是单层数组 + `StoredContact` 对象」、A32 守「nodeA2 的**聊天事件行**若含明文**必须**标为『我』」 | ✅ **实测通过** —— e2e `PASS=39 / FAIL=0 / SKIP=0`，退出码 0。**A32 是修正了一条错误断言（原前提把正确的本地回显当成 bug），语义变严格而非放宽**，详见 `HANDOFF.md` §4.4 |
 
-### 验证结果（2026-09-28 本轮重放防护轮收口，全部为实测值）
+### 验证结果（2026-09-28，**测量者逐条标注**）
 
-- `dotnet build P2PChat.slnx -t:Rebuild`：**0 个错误 0 个警告**。
-- `dotnet test P2PChat.slnx`：**340 通过 / 0 失败 / 0 跳过**
-  （演进轨迹：阶段 0 前 121 → 阶段 0 后 146 → 中途 179 → 上一轮 297 → **本轮 340**）。
-  分项目：`Crypto.Tests` 8 / `Core.Tests` 52 / `Chat.Tests` **110**（原 0）/ `Integration.Tests` **147** / `Networking.Tests` 23。
-- **AOT 发布**：`dotnet publish -c Release` 成功，**我方代码 0 条** IL/AOT 警告；
-- 阶段 0 之后新增的守卫测试：`RealDiscoveryTests` 4 条、`UpnpClientTests` 6 条、`MessageSigningTests` 8 条、
-  `BencodeTests` compact-peer 3 条、群消息加密 4 条、群元数据持久化 5 条、文件 ChunkSize 2 条、
-  `KnownDefectsTests` 回归守卫 6 条、`Chat.Tests` 80 条、`EnvelopeCodec` 边界测试 15 条、
-  `ContactService.LoadContacts` 回归 3 条、plain 模式分派测试若干。
-- **e2e（2026-09-28，Lead 亲自跑）**：`PASS=41 / FAIL=0 / SKIP=0`，**退出码 0**（起始基线 32/5）。
+> 📌 **本文档只写能指认来源的数字。** 权威表格与逐行测量者见
+> [`HANDOFF.md` §3.1](HANDOFF.md)；**正式门禁判据见 §7.4（必须 `-t:Rebuild`）**。
+
+- `dotnet build P2PChat.slnx -t:Rebuild`：**0 错 0 警**（Lead 亲自实跑）。
+- `dotnet test P2PChat.slnx`：**上一轮收口 340 通过 / 0 失败 / 0 跳过**（Lead 亲自实跑）。
+  演进轨迹：121 → 146 → 179 → **297** → **340** → **本轮总数未采信**（Lead 报 375/376 存疑，无人实测，
+  见 `HANDOFF.md` §3.1 —— **不选边**）。
+  上一轮分项目：`Crypto` 8 / `Core` 52 / `Chat` 110（原 0）/ `Integration` 147 / `Networking` 23。
+- **AOT 发布**：`dotnet publish -c Release` 成功，**我方代码 0 条** IL/AOT 警告，第三方 4 条；
+- 阶段 0 之后新增的守卫测试：`RealDiscoveryTests`、`UpnpClientTests`、`MessageSigningTests`、
+  `BencodeTests` compact-peer、群消息加密、群元数据持久化、文件 ChunkSize、
+  `KnownDefectsTests` 回归守卫、`Chat.Tests`、`EnvelopeCodec` 边界测试、
+  `ContactService.LoadContacts` 回归、plain 模式分派、重放防护 34 条（含 14 处变异验证）。
+- **e2e（2026-09-28，Lead 亲自跑）**：`PASS=42 / FAIL=0 / SKIP=0`，**退出码 0**（起始基线 32/5）。
   过程中发现并修掉 e2e 脚本**连续三个静默失败**（预置 `contacts.json` 被删 / `ConvertTo-Json` 单元素塌缩 /
   `-AsArray` 造成嵌套数组），并新增 A29a / A29b 两条前置断言让这类静默失败**当场变红**。
-  详见 `HANDOFF.md` §4.3–§4.5。
-  ⚠️ **上一轮记的 `PASS=39 / FAIL=0` 对「消息显示」而言是假绿灯** ——
+  详见 `HANDOFF.md` §4.3–§4.6。
+  ⚠️ **曾记的 `PASS=39 / FAIL=0` 对「消息显示」而言是假绿灯** ——
   A30/A31 可被一条含明文的 Serilog 日志行满足，而当时「消息从不显示」缺陷仍在。
   本轮修复唯一事件源后 `PASS=41` 才同时覆盖显示通路。详见 `HANDOFF.md` §8.1.2。
 - **AOT 发布（2026-09-28，Lead 执行）**：`dotnet publish -c Release` 成功，**我方代码 0 条** IL/AOT 警告；
@@ -314,6 +338,19 @@ nodeB: MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE l5Xxzmn...
 `ChatService.cs:116 SetSessionKey(recipient.NodeId, ephemeralKey.PrivateKey)` 和
 `PrivateMessageHandler.cs:48-50`「Content 直接是明文」在当前源码中**已不存在**。
 该文件已成为误导性文档。
+
+**2026-09-28 追加实证（修复过程中再次命中 B7，两次形态不同）：**
+
+| # | 形态 | 证据 |
+|---|---|---|
+| 1 | **测试读错了对象，且全绿** | 「收到的消息从不显示」——全部 `OnMessageReceived` 测试读的都是 **handler 自己的私有通道**，没有一处跨组件；集成测试全绿。**不是「测试不够多」，是测的通道从来不是 UI 读的那个。** |
+| 2 | **e2e 断言被一条日志行满足** | A30/A31 断言「明文出现在 nodeB2 输出」，而 Serilog 的 `私聊消息已处理: {Sender} -> {Text}` **那行本身含明文** ⇒ 断言被日志满足，**上一轮给的是假绿灯** |
+| 3 | **集成测试有、e2e 证明缺** | `/connect` 双向（自报监听端点）落地时**只有集成测试**证明它工作，**没有 e2e**。集成测试走真实 `MessageRouter` 但**不跨进程**，「反向登记后能双向发话」这一**用户可见行为**当时无端到端证据。→ 由 **A35** 补齐（场景三 `/connect` 双向 e2e 证明） |
+
+> 🎯 **三次是同一句话的三种说法**：绿灯不等于被证明。
+> (1) 绿在**另一个通道**上；(2) 绿在**一行日志**上；(3) 绿在**进程内**而用户视角是跨进程的。
+> **判据不是「有没有测试」，是「它绿的那条断言，指向的是不是我要证明的那件事」。**
+> 完整教训（含文档侧的同构面）见 `HANDOFF.md` §7.3 / §7.4。
 
 ---
 
