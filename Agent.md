@@ -686,6 +686,10 @@ private readonly ConcurrentDictionary<Guid, TaskCompletionSource<Message>> _pend
 > ℹ️ **判据 ① 为什么只有 `/connect` 需要**：hello 的 `ConversationId` 是每次调用新生成的**一次性关联标识**；而正常消息路由的 `ConversationId` 是**恒定的会话键**，回显它不提供任何额外保证（那边由 `MessageId` 去重覆盖）。
 > ⚠️ **不要**去 `ChatService.PerformKeyExchangeAsync` 加同样的回显校验 —— 那只会制造一种「已完备」的错觉。
 
+> 🧪 **守回归的两组测试（改这个文件前先看它们）**：
+> - **`tests/P2PChat.Integration.Tests/HelloResponseVerificationTests.cs`** —— 8 条**结构守卫**（读源码断言结构，不是行为断言）。它们专门钉死本条最容易复发的东西：TUI 必须调 `EnvelopeVerifier.Verify`；**TUI 不得自行实现信封解析或验签**；身份必须从**公钥**派生而非载荷里的 `SenderId`；**TUI 不得再声称 `VerifyEnvelopeCore` 替它守过身份绑定**（即那条假注释不得复活）；必须校验关联标识回显；必须按端点身份裁决分流且冲突时默认拒绝；首次接触提示必须写明「未经带外验证」且**不得声称「已验证」**。
+> - **`tests/P2PChat.Chat.Tests/EnvelopeVerifierTests.cs`** —— 11 条行为断言，含最关键的两条：伪造者用自己的**合法私钥**自签但**冒名第三方**必须被拒（且派生身份绝不是第三方、会话密钥不会记在好友名下）；**自洽的陌生主机可以通过验签 —— 这是 TOFU 的合法起点**（明确断言这一点，避免有人后来把它当 bug「修掉」）。另有端点身份判定 5 条（含「本地记录自相矛盾时按冲突处理，宁可拒绝」）与两条 **`MessageRouter.VerifyEnvelope` 必须与 `EnvelopeVerifier` 判定完全一致**的等价性断言。
+
 > ⚠️ **仍然残余（不要因为「已加验签」就认为 `/connect` 安全了）**：判据 ①②③ 都只作用于 `/connect` 这一条路径。`/add` 走的静态对端路径**没有**它们；首次接触仍是 TOFU，只能靠判据 ③ 在**第二次及以后**提供连续性。**没有历史就没有判据**，此时只能信任并**如实告知用户**。
 
 ---
@@ -934,11 +938,11 @@ $env:P2PCHAT_P2PChat__TcpPort="20091"
 
 | 项目 | 覆盖内容 |
 |---|---|
-| `P2PChat.Core.Tests` | `NodeIdTests`（FromPublicKey / XOR / CommonPrefix / hex）、`EndpointTextTests`、`SerializationTests`、**`SerializerAotRoundTripTests`**（AOT 语义往返） |
+| `P2PChat.Core.Tests` | `NodeIdTests`（FromPublicKey / XOR / CommonPrefix / hex）、`EndpointTextTests`、`SerializationTests`、**`EnvelopeCodecTests`**（信封编解码 / 边界）、**`SerializerAotRoundTripTests`**（AOT 语义往返） |
 | `P2PChat.Crypto.Tests` | `EncryptionTests`（AES-GCM 加解密、nonce 唯一性、篡改检测、ECDH/HKDF 一致性、Sign/Verify） |
-| `P2PChat.Networking.Tests` | `BencodeTests`（编解码往返、边界与畸形输入、**`ParseCompactPeers26`**）、`RealDiscoveryTests`（真实 KRPC 闭环）、`UpnpClientTests` |
-| `P2PChat.Chat.Tests` | `ChatServiceTests`、`ContactServiceTests`、`GroupChatServiceTests`、`MessageHandlerTests`、`MessageRouterTests`（信封往返 / 连接池复用）、**`ReplayGuardTests`（重放防护 30 条，见 §7 Testing）** |
-| `P2PChat.Integration.Tests` | 多节点夹具（`Support/NodeHarness.cs` + `Support/TestDoubles.cs`）驱动的：`CryptoRoundTripTests`、`DhtRoutingTableTests`、`FileTransferIntegrityTests`、`GroupChatIntegrationTests`、`IdentityAndEndpointTests`、`KnownDefectsTests`、`MessageSigningTests`、`MessageUnionSerializationTests`、`PlainModeInputTests`、`**ReplayProtectionTests**`、`TwoNodeChatIntegrationTests` |
+| `P2PChat.Networking.Tests` | `BencodeTests`（编解码往返、边界与畸形输入、**`ParseCompactPeers26`**）、`RealDiscoveryTests`（真实 KRPC 闭环）、`BootstrapPerformanceTests`、`UpnpClientTests` |
+| `P2PChat.Chat.Tests` | `ChatServiceTests`、`ContactServiceTests`、`GroupChatServiceTests`、`MessageHandlerTests`、`MessageRouterTests`（信封往返 / 连接池复用）、**`EnvelopeVerifierTests`**（验签 + 端点身份连续性）、**`ReplayGuardTests`**（重放防护，见 §7 Testing） |
+| `P2PChat.Integration.Tests` | 多节点夹具（`Support/NodeHarness.cs` + `Support/TestDoubles.cs`）驱动的：`ChatEventDeliveryTests`（B3 跨组件守卫）、`CryptoRoundTripTests`、`DhtRoutingTableTests`、`FileTransferIntegrityTests`、`GroupChatIntegrationTests`、**`HelloResponseVerificationTests`**（伪造 hello 应答被拒）、`IdentityAndEndpointTests`、`KnownDefectsTests`、`LongTermPublicKeyTests`、`MessageSigningTests`、`MessageUnionSerializationTests`、`PlainModeInputTests`、`ReplayProtectionTests`、`TwoNodeChatIntegrationTests` |
 
 **当前规模**：**门禁数字以 `dotnet test` 的实际输出为准 —— 本页不预填。**
 ⚠️ 上一次收口记录为 **331 通过 / 0 失败**（`dotnet build` 0 错 0 警）；此后 `/connect` 身份校验与事件流收敛又新增了大量用例，**引用前必须重跑**。数字看起来权威但极易过期，这是本项目反复踩到的坑。
@@ -1157,9 +1161,10 @@ AES-256-GCM(wrappingKey) → 32B 密文主体 + 12B nonce + 16B tag
 11. **`IReplayGuard` 在 `MessageRouter` 构造函数里是必填形参** —— **不要**改成 `IReplayGuard? replayGuard = null`。可选参数会让「忘记注入」静默等于「关闭防护」，是安全陷阱。
 12. **不要在文档里引用未核实的行号** —— `DEFECTS.md` / `HANDOFF.md` 里的行号是缺陷发现时的快照，早已漂移。写文档前先 `grep` 源码。
 13. 🔴 **代码注释里的「已保证 / 已强制 / 可信」必须能指到一处可验证的调用点** —— 指不到的，宁可写「⚠️ 此处**未**验签」。`P2PChatTui.ReadHelloResponseAsync` 曾用注释断言「`VerifyEnvelopeCore` 已强制公钥↔身份绑定可信」，而那条路径**从没调用过该函数**。**缺注释只是让人知道「这里没做」；假注释让人主动放弃检查**，危害大得多。详见 §3.6。
-14. 🔒 **`Channel<ChatMessageEvent>` 全进程只允许存在一条** —— 由 `ChatService` 持有。所有组件经 `IChatEventPublisher.PublishAsync` 投递，**不得自建通道**。看到第二个就是 REPAIR-PLAN B3 复发（能看到自己发的、永远看不到别人发的）。详见 §2.3。
+14. 🔒 **`Channel<ChatMessageEvent>` 全进程只允许存在一条** —— 由 `ChatService` 持有。所有组件经 `IChatEventPublisher.PublishAsync` 投递，**不得自建通道**。看到第二个就是 REPAIR-PLAN B3 复发（能看到自己发的、永远看不到别人发的）。详见 §2.3。`ChatEventDeliveryTests` 有**结构守卫**（扫源码断言「整个 Chat 项目里聊天事件通道只能由 `ChatService` 声明」）和一条**负向对照**（发布器接错时 handler 层全绿但 UI 流上什么都没有）—— 改 handler 时别让它们红。
 15. 🚨 **改 DI 之后必须实际跑一次进程** —— `dotnet build` 全绿、单测全绿**都抓不到 DI 缺陷**。漏注册则启动即崩；同一服务注册成两个实例则不崩但功能静默失效。改 `Program.cs` 时注意它**内联复制**了 Chat 层注册、**从不调用** `AddP2PChatChat()`。详见 §5.2 门禁、§3.7 顺序约束。
-16. **验签 ≠ 身份可信** —— 验签只证明「出自持该私钥的一方」。首次接触未知端点（`/connect`）是 **TOFU**，攻击者用自己的私钥签的信封密码学上完全有效。**不要**在任何用户提示或文档里宣称「验签通过 = 对方可信」。详见 §3.6 / §8.2。
+15. **验签 ≠ 身份可信** —— 验签只证明「出自持该私钥的一方」。首次接触未知端点（`/connect`）是 **TOFU**，攻击者用自己的私钥签的信封密码学上完全有效。**不要**在任何用户提示或文档里宣称「验签通过 = 对方可信」。源码里已有守卫测试盯着这条（`HelloResponseVerificationTests`）。详见 §3.6 / §8.2。
+16. **`EvaluatePeerIdentity` 不得 early-return** —— 必须扫完全部绑定，**冲突优先于匹配**。同一端点既有匹配又有不匹配说明本地绑定已损坏，「有一条能对上」不足以放行。
 
 ### 8.2 已知的宽松/待完善点
 
@@ -1299,14 +1304,17 @@ Git 历史：`06cc4e8` 初始提交 → `c971054` 数据目录迁移 → `21cba0
 ## 10. 快速上手路径（给 Agent 的最短路径）
 
 1. **想改消息协议** → `Core/Models/Message.cs` + 子类 + `Enums/MessageType.cs` + `MessageRouter.GetMessageType`；**改线路格式只能改 `Core/Extensions/EnvelopeCodec.cs`**，并同步更新 §7
-2. **想改签名/验签** → `MessageRouter.SignEnvelope` / `VerifyEnvelopeCore` + `EnvelopeCodec.ComputeSignedBytes`（改动会让新老节点互不兼容）
+2. **想改签名/验签** → `Core/Extensions/EnvelopeVerifier.cs`（唯一实现）+ `MessageRouter` 的薄委托（**保留 public static API**）；改前先读 `HelloResponseVerificationTests` 的结构守卫
 3. **想改重放防护** → `Chat/Routing/MessageReplayGuard.cs`（策略）+ `Core/Abstractions/IReplayGuard.cs`（契约）+ `Program.cs` 的 `ReplayMaxAgeSeconds` 解析。⚠️ **它是独立关卡，不要塞进 `VerifyEnvelope`**（后者是无状态的纯密码学函数，被大量测试直接调用）
-3. **想改加密** → `Crypto/Encryption/AesGcmEncryptionService.cs`（密文布局会被 `Decrypt` 与 `GroupChatService` 依赖）
-4. **想改节点发现** → `Networking/Dht/MainlineDhtService.cs` + `Bencode.cs`（含 `announce_peer` / `get_peers` 闭环与 `p2pc_peers` 扩展字段）
-5. **想改 NAT 穿透** → `Networking/Transport/UpnpClient.cs` + `MainlineDhtService.ApplyMapping`；**注意是手写 SOAP，没有 COM，不能引入 XML 解析库**
-6. **想加 TUI 命令** → `UI/Views/P2PChatTui.cs` 的 `ProcessCommandAsync` + `ShowHelp`（plain 模式与交互模式共用 `SubmitLine` 分派）
-7. **想加配置项** → `Program.cs` 的 `chatConfig.GetValue<T>(...)` + README 配置表
-8. **想调试双节点** → `scripts/e2e-verify.ps1`（记得别复制 exe，用 `P2PCHAT_DATA_DIR` 隔离到临时目录，`P2PCHAT_PLAIN=1` 抓明文）
-9. **想改数据存放位置** → `Core/Extensions/DataPath.cs`（默认 `用户主目录/.p2pc`；`GetPath` 取文件、`GetDirectory` 取子目录）
-10. **想加测试夹具** → `tests/P2PChat.Integration.Tests/Support/NodeHarness.cs`（`SenderId` 必须是真实 `KeyPair.NodeId`，不要用共享常量）；测入站策略用 `connectionDecorator` 抓**真实上线字节**再原样重放，别自己重签
-11. **想测时间相关逻辑** → **注入 `Func<DateTimeOffset>` 固定时钟**，禁止 `Thread.Sleep`（参见 `MessageReplayGuard` 的 `now` 形参）
+4. **想改 `/connect` 或任何入站路径的身份校验** → 先读 §3.6 的三道判据与 `HelloResponseVerificationTests`；`P2PChatTui.cs` 里**不得**出现任何自行实现的信封解析或验签（结构守卫会红）
+5. **想改聊天事件流** → 只经 `IChatEventPublisher.PublishAsync`；`ChatService` 是那条通道的唯一持有者。`ChatEventDeliveryTests` 里有扫源码的结构守卫与负向对照
+6. **想改加密** → `Crypto/Encryption/AesGcmEncryptionService.cs`（密文布局会被 `Decrypt` 与 `GroupChatService` 依赖）
+7. **想改节点发现** → `Networking/Dht/MainlineDhtService.cs` + `Bencode.cs`（含 `announce_peer` / `get_peers` 闭环与 `p2pc_peers` 扩展字段）
+8. **想改 NAT 穿透** → `Networking/Transport/UpnpClient.cs` + `MainlineDhtService.ApplyMapping`；**注意是手写 SOAP，没有 COM，不能引入 XML 解析库**
+9. **想加 TUI 命令** → `UI/Views/P2PChatTui.cs` 的 `ProcessCommandAsync` + `ShowHelp`（plain 模式与交互模式共用 `SubmitLine` 分派）
+10. **想加配置项** → `Program.cs` 的 `chatConfig.GetValue<T>(...)` + README 配置表
+11. **想调试双节点** → `scripts/e2e-verify.ps1`（记得别复制 exe，用 `P2PCHAT_DATA_DIR` 隔离到临时目录，`P2PCHAT_PLAIN=1` 抓明文）
+12. **想改数据存放位置** → `Core/Extensions/DataPath.cs`（默认 `用户主目录/.p2pc`；`GetPath` 取文件、`GetDirectory` 取子目录）
+13. **想加测试夹具** → `tests/P2PChat.Integration.Tests/Support/NodeHarness.cs`（`SenderId` 必须是真实 `KeyPair.NodeId`，不要用共享常量）；测入站策略用 `connectionDecorator` 抓**真实上线字节**再原样重放，别自己重签
+14. **想测时间相关逻辑** → **注入 `Func<DateTimeOffset>` 固定时钟**，禁止 `Thread.Sleep`（参见 `MessageReplayGuard` 的 `now` 形参）
+15. **改完 DI 记得真跑一次** —— `dotnet build` 全绿抓不到 DI 缺陷，见 §5.2 门禁

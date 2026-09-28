@@ -7,7 +7,7 @@ pair:
 
 members:
   en:
-    heading: "# Agent Note: /connect's hello response was never verified (unauthenticated peer introduction)"
+    heading: "# Agent Note: /connect's hello response was never verified at all (unauthenticated peer introduction)"
     status: "Status: implemented"
     sections:
       - Problem
@@ -15,11 +15,12 @@ members:
       - Alternatives considered
       - Consequences
       - Comment discipline
+      - Testing
       - Deferred
       - Related
     tokens: []
   zh:
-    heading: "# Agent Note: /connect 的 hello 响应未经任何验签（未经认证的对端引入）"
+    heading: "# Agent Note: /connect 的 hello 响应曾经完全不验签（未经认证的对端引入）"
     status: "Status: implemented"
     sections:
       - Problem
@@ -27,6 +28,7 @@ members:
       - Alternatives considered
       - Consequences
       - Comment discipline
+      - Testing
       - Deferred
       - Related
     tokens: []
