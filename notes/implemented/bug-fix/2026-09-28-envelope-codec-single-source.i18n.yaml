@@ -1,0 +1,34 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/implemented/bug-fix/2026-09-28-envelope-codec-single-source.md
+  zh: notes/implemented/bug-fix/2026-09-28-envelope-codec-single-source.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: Envelope wire codec converged onto a single source of truth in Core"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+      - Testing
+      - Deferred
+      - Related
+    tokens: []
+  zh:
+    heading: "# Agent Note: 信封线路编解码收敛到 Core 唯一真相源"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+      - Testing
+      - Deferred
+      - Related
+    tokens: []
+
+recorded: 2026-09-28

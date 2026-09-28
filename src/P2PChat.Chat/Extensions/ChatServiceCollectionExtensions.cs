@@ -3,6 +3,7 @@ using P2PChat.Core.Abstractions;
 using P2PChat.Chat.Handlers;
 using P2PChat.Chat.Routing;
 using P2PChat.Chat.Services;
+using P2PChat.Crypto.Keys;
 
 namespace P2PChat.Chat.Extensions;
 
@@ -18,6 +19,9 @@ public static class ChatServiceCollectionExtensions
     {
         // 消息路由器 (单例)
         services.AddSingleton<IMessageRouter, MessageRouter>();
+
+        // 群组元数据持久化（~/.p2pc/groups.json）—— 见 2026-09-21-group-metadata-persistence。
+        services.AddSingleton<IGroupMetadataStore, FileBackedGroupMetadataStore>();
 
         // 消息处理器
         services.AddSingleton<PrivateMessageHandler>();

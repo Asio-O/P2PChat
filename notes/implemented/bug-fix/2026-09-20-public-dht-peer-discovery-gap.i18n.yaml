@@ -2,31 +2,35 @@
 # Structure and header agreement only; not a translation-quality judgment.
 
 pair:
-  en: notes/proposed/bug-fix/2026-09-20-public-dht-peer-discovery-gap.md
-  zh: notes/proposed/bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md
+  en: notes/implemented/bug-fix/2026-09-20-public-dht-peer-discovery-gap.md
+  zh: notes/implemented/bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md
 
 members:
   en:
     heading: "# Agent Note: Public DHT cannot discover peer nodes"
-    status: "Status: proposed"
+    status: "Status: implemented"
     sections:
       - Problem
-      - Proposal
+      - Decision
       - Announced endpoint semantics
+      - P2PC protocol extensions
       - Alternatives considered
-      - Acceptance criteria
-      - Risks
+      - Consequences
+      - Verification
+      - Deferred
     tokens: []
   zh:
     heading: "# Agent Note: 公共 DHT 无法发现对端节点"
-    status: "Status: proposed"
+    status: "Status: implemented"
     sections:
       - Problem
-      - Proposal
+      - Decision
       - Announced endpoint semantics
+      - P2PC protocol extensions
       - Alternatives considered
-      - Acceptance criteria
-      - Risks
+      - Consequences
+      - Verification
+      - Deferred
     tokens: []
 
-recorded: 2026-09-20
+recorded: 2026-09-21

@@ -207,7 +207,7 @@ foreach ($s in $scenarios) {
     $nodeId = Get-Field -Text $r.Combined -Pattern '本地节点ID: ([0-9a-fA-F]{40})'
     $boot = Get-Field -Text $r.Combined -Pattern '引导节点: (.+)'
     $storeDir = Get-Field -Text $r.Combined -Pattern '密钥存储目录: (.+)'
-    $ping = Get-Field -Text $r.Combined -Pattern 'PING引导节点: (\S+)'
+    $ping = Get-Field -Text $r.Combined -Pattern 'PING 引导节点: (\S+)'
     $udpBusy = Get-Field -Text $r.Combined -Pattern 'UDP端口 (\d+) 被占用'
     $tcpBusy = Get-Field -Text $r.Combined -Pattern 'TCP端口 (\d+) 被占用'
     $attemptedUdp = if ($udpBusy -ne '<未出现>') { $udpBusy } else { $udp }

@@ -109,13 +109,40 @@ public class Program
         var actualTcpPort = tcpTransport.ListenPort;
 
         // 用实际端口创建本地节点信息
+        var localIpAddress = GetLocalIPAddress();
         var localNode = new NodeInfo
         {
             NodeId = localNodeId,
-            EndPoint = new IPEndPoint(GetLocalIPAddress(), actualTcpPort),
+            EndPoint = new IPEndPoint(localIpAddress, actualTcpPort),
             PublicKey = identity.PublicKey,
             State = Core.Enums.PeerState.Online
         };
+
+        // 2.1 / 2.3 启动时尝试 UPnP 端口映射（尽力而为，失败仅 Debug 日志）。
+        // 同一端口同时申请 TCP 与 UDP —— 与现有 DHT/TCP 监听端口一致。
+        // 无 UPnP 时 TUI 会显式标注，调用方不必再处理 fallback 路径。
+        var upnpClient = new UpnpClient(
+            loggerFactory.CreateLogger<UpnpClient>(),
+            internalClientIp: localIpAddress.ToString());
+        UpnpMapping? upnpMapping = null;
+        try
+        {
+            upnpMapping = await upnpClient.TryMapAsync(actualTcpPort, ct: CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "UPnP TryMapAsync 抛异常 —— 视为未映射");
+            upnpMapping = null;
+        }
+        if (upnpMapping is not null)
+        {
+            logger.LogInformation("UPnP 映射成功：内网 {Internal}:{Port} → 公网 {External}",
+                localIpAddress, actualTcpPort, upnpMapping.ExternalEndPoint);
+        }
+        else
+        {
+            logger.LogWarning("UPnP 不可用 —— 本机可能仅对同网段/已有连接可达；公网对端可通过 /add <ip:port> 或 /connect <ip:port> 手工接入");
+        }
 
         // 解析引导节点 (支持域名和IP)
         var bootstrapEndpoints = new List<IPEndPoint>();
@@ -154,6 +181,7 @@ public class Program
         services.AddSingleton(localNode);
         services.AddSingleton<IUdpTransport>(udpTransport);
         services.AddSingleton<ITcpTransport>(tcpTransport);
+        services.AddSingleton<IUpnpClient>(upnpClient);
         services.AddSingleton<IRoutingTable>(new RoutingTable(localNodeId, kBucketSize));
         services.AddSingleton<IDhtService>(sp =>
         {
@@ -167,6 +195,7 @@ public class Program
 
         // Chat层
         services.AddSingleton<IMessageRouter, MessageRouter>();
+        services.AddSingleton<IGroupMetadataStore, FileBackedGroupMetadataStore>();
         services.AddSingleton<PrivateMessageHandler>();
         services.AddSingleton<GroupMessageHandler>();
         services.AddSingleton<KeyExchangeHandler>();
@@ -200,6 +229,10 @@ public class Program
             var dht = (MainlineDhtService)dhtService;
             var dhtCts = new CancellationTokenSource();
             _ = dht.StartReceivingAsync(dhtCts.Token);
+
+            // 2.2 启动阶段把 UPnP 探测结果应用到 DHT 服务（更新 LocalNode.ExternalEndPoint + MappingState）。
+            // ApplyMapping 内部在成功时会立即补一次 AnnounceNowAsync，让公共 DHT 看到我们的公网入口。
+            dht.ApplyMapping(upnpMapping);
 
             // 注册消息处理器到路由器
             var router = provider.GetRequiredService<IMessageRouter>();
@@ -235,6 +268,19 @@ public class Program
         }
         finally
         {
+            // 2.1 进程退出时撤销 UPnP 映射（如果之前成功）—— 仅在映射成功的前提下尝试，
+            // 否则路由器会直接拒响应（找不到对应映射），徒增延迟。
+            if (upnpMapping is not null)
+            {
+                try
+                {
+                    await upnpClient.RemoveAsync(actualTcpPort, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex, "UPnP 映射撤销失败 —— 路由器租约会自动过期");
+                }
+            }
             Log.CloseAndFlush();
         }
     }
@@ -291,7 +337,9 @@ public class Program
                 {
                     NodeId = contact.NodeId,
                     EndPoint = endPoint,
-                    PublicKey = [],
+                    // 联系人只存 NodeId + ip:port，对端长期公钥未知 → 显式 null。
+                    // 真实公钥由 GroupChatService 在需要包装群密钥时主动握手取回。
+                    PublicKey = null,
                     State = Core.Enums.PeerState.Online
                 });
             }

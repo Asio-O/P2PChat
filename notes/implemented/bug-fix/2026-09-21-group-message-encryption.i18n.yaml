@@ -1,0 +1,28 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/implemented/bug-fix/2026-09-21-group-message-encryption.md
+  zh: notes/implemented/bug-fix/2026-09-21-group-message-encryption.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: Group messages must travel AES-256-GCM encrypted"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+    tokens: []
+  zh:
+    heading: "# Agent Note: 群消息必须走 AES-256-GCM 加密"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+    tokens: []
+
+recorded: 2026-09-21

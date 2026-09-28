@@ -40,6 +40,25 @@ public sealed class InMemoryKeyStore : IKeyStore
 }
 
 /// <summary>
+/// 内存群组元数据存储 — 测试专用，避免触碰真实磁盘 (FileBackedGroupMetadataStore 依赖 DataPath)。
+/// 语义与生产实现一致；持久化相关测试请直接使用真实实现。
+/// </summary>
+public sealed class InMemoryGroupMetadataStore : IGroupMetadataStore
+{
+    private readonly Dictionary<string, GroupInfo> _groups = [];
+
+    public IReadOnlyList<GroupInfo> LoadAll() => _groups.Values.ToList();
+
+    public void Save(IEnumerable<GroupInfo> groups)
+    {
+        _groups.Clear();
+        foreach (var g in groups) _groups[g.GroupId] = g;
+    }
+
+    public void Remove(string groupId) => _groups.Remove(groupId);
+}
+
+/// <summary>
 /// 测试用 DHT 服务 — 只用一张预置的"节点ID → NodeInfo"表实现 FindNodeAsync，
 /// 其余 DHT 行为 (网络发现) 不在集成测试范围内。
 /// </summary>

@@ -1,0 +1,28 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/implemented/bug-fix/2026-09-21-message-signing.md
+  zh: notes/implemented/bug-fix/2026-09-21-message-signing.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: Outbound messages must be signed with the long-term ECDSA key; inbound messages must verify the signature"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+    tokens: []
+  zh:
+    heading: "# Agent Note: 出站消息必须用长期 ECDSA 私钥签名、入站必须验签"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+    tokens: []
+
+recorded: 2026-09-21

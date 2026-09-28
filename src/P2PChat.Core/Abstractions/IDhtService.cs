@@ -1,3 +1,4 @@
+using System.Net;
 using P2PChat.Core.Models;
 
 namespace P2PChat.Core.Abstractions;
@@ -58,4 +59,42 @@ public interface IDhtService
     /// 节点发现事件流
     /// </summary>
     IAsyncEnumerable<PeerDiscoveryEventArgs> OnPeerDiscovered { get; }
+
+    /// <summary>
+    /// 累计成功完成对外宣告（announce_peer）的对端节点数。
+    /// </summary>
+    /// <remarks>
+    /// 仅 <c>MainlineDhtService</c> 实现真实的 <c>announce_peer</c> 协议路径；其它实现的默认值为 0。
+    /// 由 <c>P2PCHAT_SELFTEST</c> 输出，供无人值守断言读取。
+    /// </remarks>
+    int AnnouncedPeerCount => 0;
+
+    /// <summary>
+    /// 最近一次完成 announce_peer 批量宣告的时间（UTC）。未宣告过则为 <see cref="DateTime.MinValue"/>。
+    /// </summary>
+    /// <remarks>语义见 <see cref="AnnouncedPeerCount"/>。</remarks>
+    DateTime LastAnnounceUtc => DateTime.MinValue;
+
+    /// <summary>
+    /// NAT 穿透（UPnP / NAT-PMP）状态：是否成功把本机端口暴露到公网。
+    /// </summary>
+    /// <remarks>
+    /// 默认 <see cref="NatMappingState.NotAttempted"/>；仅 <c>MainlineDhtService</c> 装配 UPnP 后会更新。
+    /// TUI 状态栏与 <c>P2PCHAT_SELFTEST</c> 用此字段提示用户可达性范围。
+    /// </remarks>
+    NatMappingState NatMappingState => NatMappingState.NotAttempted;
+
+    /// <summary>UPnP 探测到的本机公网入口；未成功时为 null。</summary>
+    IPEndPoint? LocalExternalEndPoint => null;
+}
+
+/// <summary>NAT 穿透（UPnP / NAT-PMP）状态。</summary>
+public enum NatMappingState
+{
+    /// <summary>尚未尝试 UPnP 映射。</summary>
+    NotAttempted,
+    /// <summary>UPnP 映射成功，本机端口已对外暴露。</summary>
+    Mapped,
+    /// <summary>无 UPnP / 路由器不支持 / 映射失败 —— 本机只对同网段/已有连接可达。</summary>
+    Unavailable
 }

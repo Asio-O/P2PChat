@@ -1,0 +1,30 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/implemented/feature/2026-09-21-blind-connect.md
+  zh: notes/implemented/feature/2026-09-21-blind-connect.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: /connect <ip:port> — direct connect without a known peer NodeId"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+      - Deferred
+    tokens: []
+  zh:
+    heading: "# Agent Note: /connect <ip:port> — 直连（不需预知对端节点 ID）"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+      - Deferred
+    tokens: []
+
+recorded: 2026-09-21

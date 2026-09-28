@@ -1,0 +1,28 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/implemented/bug-fix/2026-09-21-group-metadata-persistence.md
+  zh: notes/implemented/bug-fix/2026-09-21-group-metadata-persistence.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: Group metadata must be persisted"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+    tokens: []
+  zh:
+    heading: "# Agent Note: 群组元数据必须持久化"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+    tokens: []
+
+recorded: 2026-09-21

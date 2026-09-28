@@ -103,12 +103,22 @@ function Start-P2PNode {
         [string]$Name,
         [string]$DataDir,
         [string]$RunDir,
-        [hashtable]$EnvVars
+        [hashtable]$EnvVars,
+        # 保留已存在的 $DataDir 内容（只确保目录存在）。
+        # 供「先预置 contacts.json 再启动」的场景使用 —— 否则本函数开头的
+        # Remove-Item -Recurse 会把刚写好的 contacts.json 删掉，
+        # 导致节点以「零联系人」启动，后续 /msg <别名> 必然失败且毫无日志线索。
+        [switch]$PreserveDataDir
     )
-    foreach ($d in @($DataDir, $RunDir)) {
-        if (Test-Path -LiteralPath $d) { Remove-Item -LiteralPath $d -Recurse -Force }
-        New-Item -ItemType Directory -Path $d -Force | Out-Null
+    if ($PreserveDataDir) {
+        New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
     }
+    else {
+        if (Test-Path -LiteralPath $DataDir) { Remove-Item -LiteralPath $DataDir -Recurse -Force }
+        New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
+    }
+    if (Test-Path -LiteralPath $RunDir) { Remove-Item -LiteralPath $RunDir -Recurse -Force }
+    New-Item -ItemType Directory -Path $RunDir -Force | Out-Null
 
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $ExePath            # 固定同一路径：绝不复制 exe
@@ -339,13 +349,13 @@ try {
     Add-Result 'A13' 'nodeB TCP 监听成功' $(if ($listenB -eq "0.0.0.0:$NodeBTcpPort") { 'PASS' } else { 'FAIL' }) "TCP监听已启动: $listenB"
 
     # (5) DHT 引导 PING + 往返
-    $pingCountA = [regex]::Matches($outA.Combined, 'PING引导节点: \S+').Count
-    $pingPeerA = [regex]::IsMatch($outA.Combined, "PING引导节点: 127\.0\.0\.1:$NodeBUdpPort")
+    $pingCountA = [regex]::Matches($outA.Combined, 'PING 引导节点: \S+').Count
+    $pingPeerA = [regex]::IsMatch($outA.Combined, "PING 引导节点: 127\.0\.0\.1:$NodeBUdpPort")
     Add-Result 'A14' 'nodeA DHT 引导发出 PING' $(if ($pingCountA -gt 0) { 'PASS' } else { 'FAIL' }) "PING 行数=$pingCountA"
     Add-Result 'A15' "nodeA PING 到对端 127.0.0.1:$NodeBUdpPort" $(if ($pingPeerA) { 'PASS' } else { 'FAIL' }) "匹配=$pingPeerA"
     $respA = [regex]::IsMatch($outA.Combined, "引导节点 127\.0\.0\.1:$NodeBUdpPort 响应成功")
     Add-Result 'A16' '对端 nodeB 响应 PING 成功（真实双节点 UDP 往返）' $(if ($respA) { 'PASS' } else { 'FAIL' }) "日志匹配=$respA 观测窗口=$sawResponse"
-    $bootDoneA = Get-Field -Text $outA.Combined -Pattern 'DHT引导完成, 路由表: (\d+)节点'
+    $bootDoneA = Get-Field -Text $outA.Combined -Pattern 'DHT 引导完成, 路由表: (\d+) 节点'
     $foundA = Get-Field -Text $outA.Combined -Pattern '引导完成, 发现 (\d+) 个节点'
     Add-Result 'A17' 'nodeA 引导完成且路由表节点数 >= 1' $(if ($bootDoneA -and [int]$bootDoneA -ge 1) { 'PASS' } else { 'FAIL' }) "引导完成时路由表节点数=$bootDoneA（同批 FIND_NODE 返回：发现 $foundA 个节点）"
     $knownA = Get-Field -Text $outA.StdOut -Pattern 'DHT已知节点:\s*(\d+)'
@@ -397,6 +407,165 @@ try {
     $sameExe = ($nodeA.ExePath -eq $nodeB.ExePath) -and ($nodeA.ExePath -eq $ExePath)
     Add-Result 'A28' '所有实例共用同一 exe 路径（未复制 exe，避免防火墙重复询问）' $(if ($sameExe) { 'PASS' } else { 'FAIL' }) "nodeA=$($nodeA.ExePath); nodeB=$($nodeB.ExePath)"
 
+    # ---- 8. 明文往返：Phase 2 重启 + 预置联系人 + stdin 注入 --------------------
+    # REPAIR-PLAN §4.6：两实例互发一条消息，接收端日志/输出出现明文。
+    # Phase 1 已捕获 Node A/B 的 NodeId 与公网入口 IP+端口；本阶段在「线性输出」
+    # 模式（`P2PCHAT_PLAIN=1`）下重启两个实例 —— `DrainInbox` 会把每条聊天事件
+    # 逐行写入 stdout —— 预置 Node B 到 Node A 的 `contacts.json`（静态对端 + 已知
+    # 端点，免 DHT 即可直连），再通过 Node A 的 stdin 注入 `/msg nodeB <plaintext>`
+    # 命令，等待 Node B 的 stdout 出现该明文。
+    #
+    # 与 Phase 1 共用同一 exe、不同 `P2PCHAT_DATA_DIR` 与端口隔离；保证 firewall 不会
+    # 因为新进程路径而弹窗（沿用 Phase 1 的 exe 路径）。
+    if (-not $useSelfTest) {
+        # Phase 1 用 -NoSelfTest 时进程常驻，stdout 不会自动打印自检块，捕获不到 NodeId。
+        Add-Result 'A29' '明文往返：跳过（Phase 1 使用 -NoSelfTest，无法捕获 NodeId）' 'SKIP' '移除 -NoSelfTest 后重跑以启用 Phase 2'
+    } elseif (-not $idA -or -not $idB) {
+        Add-Result 'A29' '明文往返：跳过（Phase 1 未能解析两节点 NodeId）' 'SKIP' "idA=$idA idB=$idB"
+    } else {
+        Write-Host "[8/8] 明文往返：Phase 2 重启 + 预置联系人 + stdin 注入..." -ForegroundColor Yellow
+
+        $dataDirA2 = Join-Path $WorkRoot 'dataA2'
+        $dataDirB2 = Join-Path $WorkRoot 'dataB2'
+        $runDirA2 = Join-Path $WorkRoot 'runA2'
+        $runDirB2 = Join-Path $WorkRoot 'runB2'
+
+        # 预置 Node B 到 Node A 的 contacts.json（StoredContact 形状：NodeId/Alias/EndPoint/AddedAt）
+        # ⚠️ 顶层必须是**恰好一层**的 JSON 数组，元素是 StoredContact 对象。
+        #   - 写成裸对象 `{...}`   → List<StoredContact> 反序列化抛 JsonException → 联系人全丢
+        #   - 写成嵌套数组 `[[{}]]` → 同样解析不出元素 → 联系人全丢
+        #   两者都只在日志里留一行异常，脚本其余部分照跑，最后只表现为「明文没到」。
+        #   PowerShell 坑位：`@(...) | ConvertTo-Json` 会在单元素时**塌缩**成对象；
+        #   而 `-InputObject @(...) -AsArray` 会**多包一层**变成嵌套数组。正确写法是
+        #   `-InputObject @(...)` 且**不加** -AsArray。
+        $contactsFile = Join-Path $dataDirA2 'contacts.json'
+        if (Test-Path -LiteralPath $dataDirA2) { Remove-Item -LiteralPath $dataDirA2 -Recurse -Force }
+        New-Item -ItemType Directory -Path $dataDirA2 -Force | Out-Null
+        $contactsJson = ConvertTo-Json -InputObject @(
+            @{
+                NodeId  = $idB
+                Alias   = 'nodeB'
+                EndPoint = "127.0.0.1:$NodeBTcpPort"
+                AddedAt = (Get-Date).ToUniversalTime().ToString('o')
+            }
+        ) -Depth 5
+        Set-Content -LiteralPath $contactsFile -Value $contactsJson -Encoding UTF8
+
+        # 启动 Phase 2：PLAIN=1（强制 TUI 走线性输出模式，逐行写入 stdout），不启用 SELFTEST
+        $envA2 = @{
+            'P2PCHAT_DATA_DIR'         = $dataDirA2
+            'P2PCHAT_P2PChat__UdpPort' = "$NodeAUdpPort"
+            'P2PCHAT_P2PChat__TcpPort' = "$NodeATcpPort"
+            'P2PCHAT_PLAIN'            = '1'
+        }
+        $envB2 = @{
+            'P2PCHAT_DATA_DIR'         = $dataDirB2
+            'P2PCHAT_P2PChat__UdpPort' = "$NodeBUdpPort"
+            'P2PCHAT_P2PChat__TcpPort' = "$NodeBTcpPort"
+            'P2PCHAT_PLAIN'            = '1'
+        }
+        # PreserveDataDir：contacts.json 已在上面预置好，绝不能被 Start-P2PNode 删掉
+        # （历史事故：Phase 2 一直以「零联系人」启动，/msg nodeB 静默失败，见 HANDOFF §4.3）
+        $nodeA2 = Start-P2PNode -Name 'nodeA2' -DataDir $dataDirA2 -RunDir $runDirA2 -EnvVars $envA2 -PreserveDataDir
+        $nodeB2 = Start-P2PNode -Name 'nodeB2' -DataDir $dataDirB2 -RunDir $runDirB2 -EnvVars $envB2
+
+        # 预置是否真的留下来了 —— 少了它后面必然失败，而失败是静默的
+        $contactsSurvived = Test-Path -LiteralPath $contactsFile
+        Add-Result 'A29a' 'Phase 2：预置的 contacts.json 在 nodeA2 启动后仍然存在（静态对端前提）' $(if ($contactsSurvived) { 'PASS' } else { 'FAIL' }) "contacts.json 存在=$contactsSurvived ($contactsFile)"
+
+        # 形状必须正确：**恰好一层**数组，元素是带 NodeId 的对象。
+        # 只检查「是不是数组」不够 —— 嵌套数组 `[[{}]]` 同样是数组，却一样解析不出联系人。
+        # 用**原始文本**判定而不是靠 ConvertFrom-Json 的对象类型：PowerShell 会把单元素数组
+        # 解包成标量（`$p -is [Array]` 对**正确**文件反而是 False），也会对嵌套数组做成员展平，
+        # 两种行为都会让基于类型的检查给出错误结论。首字符判定没有这些歧义。
+        $contactsShapeOk = $false
+        $contactsShapeEv = '文件不存在'
+        if ($contactsSurvived) {
+            $raw = (Get-Content -LiteralPath $contactsFile -Raw).TrimStart()
+            $isArray  = $raw.StartsWith('[')
+            $isNested = $raw.StartsWith('[[')
+            $hasNodeId = $false
+            try { $hasNodeId = $null -ne (@($raw | ConvertFrom-Json)[0]).PSObject.Properties['NodeId'] } catch { }
+            $contactsShapeOk = $isArray -and (-not $isNested) -and $hasNodeId
+            $contactsShapeEv = "首字符='$($raw.Substring(0,1))' 是数组=$isArray 是嵌套=$isNested 含NodeId=$hasNodeId"
+        }
+        Add-Result 'A29b' 'Phase 2：contacts.json 是「单层数组 + StoredContact 对象」（与 LoadContacts 契约一致）' $(if ($contactsShapeOk) { 'PASS' } else { 'FAIL' }) $contactsShapeEv
+
+        # 等两实例 TCP 监听就绪（contacts.json 加载是同步的，无需等待）
+        $aReady2 = Wait-Until -TimeoutSeconds 15 -Condition {
+            (Read-NodeLog -DataDir $dataDirA2) -match "TCP监听已启动: 0\.0\.0\.0:$NodeATcpPort"
+        }
+        $bReady2 = Wait-Until -TimeoutSeconds 15 -Condition {
+            (Read-NodeLog -DataDir $dataDirB2) -match "TCP监听已启动: 0\.0\.0\.0:$NodeBTcpPort"
+        }
+        Add-Result 'A29' 'Phase 2：nodeA2/nodeB2 实例启动并 TCP 监听就绪' $(if ($aReady2 -and $bReady2) { 'PASS' } else { 'FAIL' }) "nodeA2=$aReady2 nodeB2=$bReady2"
+
+        # 给 DHT 启动循环与后台线程一点时间（避免 stdin 写入抢跑）
+        Start-Sleep -Seconds 2
+
+        # 通过 Node A 的 stdin 注入 `/msg nodeB <plaintext>` 命令
+        # TUI 用 Console.ReadKey 单字符读取，所以逐字符写 + 30ms 间隔；明文用 ASCII + '-' 无空格，匹配 /msg 命令切分逻辑。
+        $plaintext = "HELLO-E2E-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        $cmd = "/msg nodeB $plaintext"
+        foreach ($c in $cmd.ToCharArray()) {
+            $nodeA2.Proc.StandardInput.Write($c)
+            Start-Sleep -Milliseconds 30
+        }
+        $nodeA2.Proc.StandardInput.Write("`n")
+        $nodeA2.Proc.StandardInput.Flush()
+
+        # 等 Node B 的日志里出现明文（plain 模式 DrainInbox 写入 Serilog 日志）
+        $swRound = [System.Diagnostics.Stopwatch]::StartNew()
+        $plaintextSeen = Wait-Until -TimeoutSeconds 30 -IntervalMs 500 -Condition {
+            (Read-NodeLog -DataDir $dataDirB2) -match [regex]::Escape($plaintext)
+        }
+        Write-Host ("    -> 明文往返耗时 {0}s  是否在 nodeB2 日志/输出中出现: {1}" -f [math]::Round($swRound.Elapsed.TotalSeconds,1), $plaintextSeen) -ForegroundColor $(if ($plaintextSeen) { 'Green' } else { 'Red' })
+
+        # 关掉 Phase 2 实例（让 stdout/stderr 关闭以便 Get-NodeOutput 完成）
+        foreach ($n in @($nodeA2, $nodeB2)) {
+            try {
+                if ($n.Proc -and -not $n.Proc.HasExited) {
+                    $n.Proc.Kill($true)
+                    $null = $n.Proc.WaitForExit(3000)
+                    $n.KilledByScript = $true
+                }
+            } catch { }
+        }
+        Start-Sleep -Seconds 1
+
+        $outA2 = Get-NodeOutput -Node $nodeA2
+        $outB2 = Get-NodeOutput -Node $nodeB2
+
+        Add-Result 'A30' 'Phase 2：nodeA2 发送的明文出现在 nodeB2 日志（私聊端到端往返）' $(if ($plaintextSeen) { 'PASS' } else { 'FAIL' }) "明文='$plaintext'"
+        $plainInCombined = $outB2.Combined -match [regex]::Escape($plaintext)
+        Add-Result 'A31' 'Phase 2：nodeB2 StdOut+Log 累计中包含明文（plain 模式 DrainInbox 写入）' $(if ($plainInCombined) { 'PASS' } else { 'FAIL' }) $(if ($plainInCombined) { 'matched' } else { "no match in $($outB2.Combined.Length)B combined" })
+
+        # A32 的**旧断言是错的**，本轮修正（见 HANDOFF §4.3）：
+        # 旧版断言「nodeA2 看不到明文」，隐含假设是「plain 模式不回显本地事件流」。
+        # 但 `DrainInbox` 在 plain 模式下会把**每一条** inbox 项（含
+        # `ChatService.SendPrivateMessageAsync` 本地推送的 IsOutgoing=true 事件）
+        # 逐行写到 stdout。发送一旦成功，nodeA2 必然回显这条明文 —— 这是正确行为。
+        #
+        # 有意义的断言是：nodeA2 的**聊天事件行**若含该明文，**必须**标为本地出站（「我」），
+        # 不能被标成他站来信 —— 否则 nodeB2 里的明文就不能作为「真的收到了」的证据。
+        #
+        # 只看 DrainInbox 的事件行（形如 `[cid] [HH:mm] 发件人: 正文`）；
+        # Serilog 的 `私聊消息已发送: x -> 正文` 是**日志**、不是事件行，不在本断言范围内
+        # （日志类断言由 A20/A21 覆盖）。
+        # 注意：.NET 正则**不支持** \h（那是 PCRE 语法），必须显式写字符类
+        $eventLineRe = '\[(?:[0-9a-fA-F]{1,8}|__system__)\]\s*\[\d{2}:\d{2}\]\s*(?<who>[^:]+):'
+        $a2EventLines = @($outA2.Combined -split "`r?`n" |
+            Where-Object { $_ -match [regex]::Escape($plaintext) -and $_ -match $eventLineRe })
+        $a2NotOutgoing = @($a2EventLines | Where-Object { $_ -notmatch '\[\d{2}:\d{2}\]\s*我\s*:' })
+        Add-Result 'A32' 'Phase 2：nodeA2 的聊天事件行若含明文，必须标为本地出站「我」（不能是他站来信）' `
+            $(if ($a2NotOutgoing.Count -eq 0) { 'PASS' } else { 'FAIL' }) `
+            $(if ($a2EventLines.Count -eq 0) { 'nodeA2 无聊天事件行含该明文' } else { "事件行 $($a2EventLines.Count) 行，其中非出站 $($a2NotOutgoing.Count) 行"; $a2EventLines | Select-Object -First 3 | ForEach-Object { "  $_" } })
+
+        # 收集 Phase 2 关键日志供末尾摘要使用
+        $outA.Combined += "`n" + $outA2.Combined
+        $outB.Combined += "`n" + $outB2.Combined
+    }
+
     # ---- 输出 --------------------------------------------------------------
     Write-Host ""
     Write-Host "==============================================" -ForegroundColor Cyan
@@ -422,7 +591,7 @@ try {
     Write-Host "==============================================" -ForegroundColor Cyan
     Write-Host " 原始日志关键行" -ForegroundColor Cyan
     Write-Host "==============================================" -ForegroundColor Cyan
-    $keyPattern = '密钥存储目录|UDP传输绑定到|TCP监听已启动|节点ID|实际端口|引导节点|PING引导节点|引导完成|路由表|注册消息处理器|被占用|自检|ERR\]|WRN\]|FTL\]|CRT\]|致命错误'
+    $keyPattern = '密钥存储目录|UDP传输绑定到|TCP监听已启动|节点ID|实际端口|引导节点|PING 引导节点|引导完成|路由表|注册消息处理器|被占用|自检|ERR\]|WRN\]|FTL\]|CRT\]|致命错误'
     foreach ($n in @(@{ N = 'nodeA'; O = $outA; D = $dataDirA }, @{ N = 'nodeB'; O = $outB; D = $dataDirB })) {
         Write-Host ""
         Write-Host "--- $($n.N) (data=$($n.D)) ---" -ForegroundColor Yellow

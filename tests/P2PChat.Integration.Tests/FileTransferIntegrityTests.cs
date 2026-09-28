@@ -328,4 +328,112 @@ public class FileTransferIntegrityTests : IDisposable
             SenderId = SenderId(), ConversationId = "conv", TransferId = "不存在的传输", Accepted = true
         }));
     }
+
+    [Fact]
+    public async Task 发送方_SendOfferAsync_非默认ChunkSize_必须同步写入state并以该大小实际切片()
+    {
+        // 2026-09-21-filetransfer-chunksize：发送循环此前硬编码 DefaultChunkSize (65536)，
+        // 即便 meta 与 state.ChunkSize 都声明 4096，实际切片仍按 65536 进行。本测试
+        // 不依赖接收端 RPC 层（FileMeta/Chunk/Ack 处理器在生产路径上仍未接入路由器，详见
+        // REPAIR-PLAN §阶段 4 留口）；只观察 SendOfferAsync 产生的 meta 与 HandleFileAckAsync
+        // 触发的 SendFileChunksAsync 实际切片大小。RecordingMessageRouter 替代真实 TCP，
+        // 模拟对端回送 Accepted 的 FileAck。
+        var (sender, dht, router, _, remote) = BuildReceiver();
+        dht.Register(remote);
+        router.Clear();
+
+        const int customChunkSize = 4096;
+        const int fileLength = 200_000;        // 200KB → 49 个 4096 块（最后一块 1376B）
+        var data = new byte[fileLength];
+        Random.Shared.NextBytes(data);
+        var hash = SHA256.HashData(data);
+
+        var srcPath = Path.Combine(_root, "src-sender-chunksize.bin");
+        await File.WriteAllBytesAsync(srcPath, data);
+
+        // 1. SendOfferAsync 写入 meta：ChunkSize 必须真实声明调用方传入的值（不再回退到 65536）
+        var transferId = await sender.SendOfferAsync(remote.NodeId, srcPath, customChunkSize);
+
+        var meta = router.Sent.OfType<FileMetaMessage>().Single();
+        meta.ChunkSize.ShouldBe(customChunkSize);
+        meta.TotalChunks.ShouldBe((int)Math.Ceiling((double)fileLength / customChunkSize));
+        meta.FileHash.ShouldBe(hash);
+
+        // 2. 模拟对端回送 Accepted 的 FileAck → 触发 SendFileChunksAsync
+        router.Clear();
+        await sender.HandleFileAckAsync(new FileAckMessage
+        {
+            SenderId = SenderId(),
+            ConversationId = remote.NodeId.ToHexString(),
+            TransferId = transferId,
+            Accepted = true
+        });
+
+        // 等待发送循环把所有分块全部送入 router
+        var expectedChunks = (int)Math.Ceiling((double)fileLength / customChunkSize);
+        await Wait.UntilAsync(
+            () => router.Sent.OfType<FileChunkMessage>().Count() >= expectedChunks,
+            timeoutMs: 15000);
+
+        // 3. 捕获到的分块数量与文件长度 / ChunkSize 完全一致；每块大小严格等于 state.ChunkSize
+        var chunks = router.Sent.OfType<FileChunkMessage>()
+            .OrderBy(c => c.ChunkIndex).ToList();
+        chunks.Count.ShouldBe(expectedChunks);
+        for (var i = 0; i < chunks.Count - 1; i++)
+        {
+            chunks[i].ChunkIndex.ShouldBe(i);
+            chunks[i].Data.Length.ShouldBe(customChunkSize,
+                $"第 {i} 个分块大小必须严格等于 state.ChunkSize={customChunkSize}（之前硬编码 DefaultChunkSize=65536）");
+        }
+        chunks[^1].Data.Length.ShouldBe(fileLength - (expectedChunks - 1) * customChunkSize,
+            "最后一个分块为文件剩余字节");
+
+        // 4. 字节级重组应与源文件一致（与原文件 SHA-256 一致）
+        var reassembled = new byte[fileLength];
+        foreach (var c in chunks)
+            Array.Copy(c.Data, 0, reassembled, c.ChunkIndex * customChunkSize, c.Data.Length);
+        reassembled.ShouldBe(data);
+        SHA256.HashData(reassembled).ShouldBe(hash);
+    }
+
+    [Fact]
+    public async Task 发送方_SendOfferAsync_默认路径_回归基线分块大小65536()
+    {
+        // 不传 chunkSize 时走默认路径：行为应与阶段 0 的 146 通过基线一致。
+        var (sender, dht, router, _, remote) = BuildReceiver();
+        dht.Register(remote);
+        router.Clear();
+
+        const int fileLength = 200_000;        // 200KB → 4 个 65536 块（最后一块 3392B）
+        var data = new byte[fileLength];
+        Random.Shared.NextBytes(data);
+        var srcPath = Path.Combine(_root, "src-sender-default.bin");
+        await File.WriteAllBytesAsync(srcPath, data);
+
+        var transferId = await sender.SendOfferAsync(remote.NodeId, srcPath);
+
+        var meta = router.Sent.OfType<FileMetaMessage>().Single();
+        meta.ChunkSize.ShouldBe(65536, "默认路径必须等于 DefaultChunkSize");
+        meta.TotalChunks.ShouldBe(4);
+
+        router.Clear();
+        await sender.HandleFileAckAsync(new FileAckMessage
+        {
+            SenderId = SenderId(),
+            ConversationId = remote.NodeId.ToHexString(),
+            TransferId = transferId,
+            Accepted = true
+        });
+
+        await Wait.UntilAsync(
+            () => router.Sent.OfType<FileChunkMessage>().Count() >= 4,
+            timeoutMs: 15000);
+
+        var chunks = router.Sent.OfType<FileChunkMessage>()
+            .OrderBy(c => c.ChunkIndex).ToList();
+        chunks.Count.ShouldBe(4);
+        for (var i = 0; i < chunks.Count - 1; i++)
+            chunks[i].Data.Length.ShouldBe(65536);
+        chunks[^1].Data.Length.ShouldBe(3392);
+    }
 }

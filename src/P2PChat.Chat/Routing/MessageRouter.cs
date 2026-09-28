@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
@@ -10,12 +11,14 @@ namespace P2PChat.Chat.Routing;
 
 /// <summary>
 /// 消息路由器 — 插件式消息分发中枢
-/// 负责: 处理器注册、入站消息分发、出站消息发送、连接池管理
+/// 负责: 处理器注册、入站消息分发、出站消息发送、连接池管理、出站签名 + 入站验签
 /// </summary>
 public class MessageRouter : IMessageRouter
 {
     private readonly ITcpTransport _tcpTransport;
     private readonly ISerializer _serializer;
+    private readonly IEncryptionService _encryption;
+    private readonly IKeyStore _keyStore;
     private readonly ILogger<MessageRouter> _logger;
     private readonly ConcurrentDictionary<MessageType, IMessageHandler> _handlers = new();
     private readonly ConcurrentDictionary<string, ITcpConnection> _connectionPool = new();
@@ -26,10 +29,14 @@ public class MessageRouter : IMessageRouter
     public MessageRouter(
         ITcpTransport tcpTransport,
         ISerializer serializer,
+        IEncryptionService encryption,
+        IKeyStore keyStore,
         ILogger<MessageRouter> logger)
     {
         _tcpTransport = tcpTransport;
         _serializer = serializer;
+        _encryption = encryption;
+        _keyStore = keyStore;
         _logger = logger;
     }
 
@@ -53,6 +60,19 @@ public class MessageRouter : IMessageRouter
     {
         _logger.LogTrace("入站消息: Type={Type}, From={Sender}",
             envelope.MessageType, Convert.ToHexString(envelope.SenderId).ToLower()[..8]);
+
+        // 签名/身份校验：见 2026-09-21-message-signing。
+        // 1) 缺签名/缺公钥 → 拒绝
+        // 2) ECDSA 验签失败 → 拒绝
+        // 3) 公钥派生的 NodeId 与 SenderId 不一致 → 拒绝（防 SenderId 冒名）
+        // 全部通过才进入正常 handler 派发。
+        if (!VerifyEnvelope(envelope, _encryption, out var failureReason))
+        {
+            _logger.LogWarning("消息验签失败，已丢弃: Type={Type}, Reason={Reason}, From={Sender}",
+                envelope.MessageType, failureReason,
+                Convert.ToHexString(envelope.SenderId).ToLower()[..8]);
+            return;
+        }
 
         if (!_handlers.TryGetValue(envelope.MessageType, out var handler))
         {
@@ -85,15 +105,20 @@ public class MessageRouter : IMessageRouter
     /// <inheritdoc />
     public async Task SendViaConnectionAsync(ITcpConnection connection, Message message, CancellationToken ct = default)
     {
-        var envelope = new MessageEnvelope
+        var identity = _keyStore.GetOrCreateIdentity();
+
+        var unsigned = new MessageEnvelope
         {
             MessageType = GetMessageType(message),
             SequenceNumber = NextSeq(),
-            SenderId = message.SenderId,
+            SenderId = identity.NodeId.ToByteArray(),   // 强制覆盖：发送方真实身份（不再让 Message.SenderId 决定）
             MessageId = message.MessageId,
             Timestamp = message.Timestamp,
+            SenderPublicKey = identity.PublicKey,
             Payload = _serializer.Serialize(message)
         };
+
+        var envelope = SignEnvelope(unsigned, identity, _encryption);
 
         var data = SerializeEnvelope(envelope);
         await connection.SendAsync(data, ct);
@@ -166,52 +191,112 @@ public class MessageRouter : IMessageRouter
         _ => MessageType.Unknown
     };
 
-    private byte[] SerializeEnvelope(MessageEnvelope envelope)
+    /// <summary>
+    /// 用发送方长期私钥计算签名，写回 <see cref="MessageEnvelope.Signature"/> 字段，返回新信封。
+    /// 调用方负责把 SenderId / SenderPublicKey / Payload / 其他字段已正确填充。
+    /// </summary>
+    public static MessageEnvelope SignEnvelope(MessageEnvelope envelope, KeyPair identity, IEncryptionService encryption)
     {
-        using var ms = new MemoryStream();
-        ms.WriteByte(envelope.Version);
-        ms.WriteByte((byte)envelope.MessageType);
-        var seqBytes = BitConverter.GetBytes(envelope.SequenceNumber);
-        if (BitConverter.IsLittleEndian) Array.Reverse(seqBytes);
-        ms.Write(seqBytes);
-        ms.Write(envelope.SenderId);
-        var msgIdBytes = envelope.MessageId.ToByteArray();
-        ms.Write(msgIdBytes);
-        var tsBytes = BitConverter.GetBytes(envelope.Timestamp);
-        if (BitConverter.IsLittleEndian) Array.Reverse(tsBytes);
-        ms.Write(tsBytes);
-        ms.Write(envelope.Payload);
-        return ms.ToArray();
+        ArgumentNullException.ThrowIfNull(envelope);
+        ArgumentNullException.ThrowIfNull(identity);
+        ArgumentNullException.ThrowIfNull(encryption);
+
+        if (envelope.SenderPublicKey == null || envelope.SenderPublicKey.Length == 0)
+            throw new ArgumentException("SenderPublicKey 必须在签名前填充", nameof(envelope));
+        if (identity.PrivateKey == null || identity.PrivateKey.Length == 0)
+            throw new ArgumentException("identity.PrivateKey 为空", nameof(identity));
+
+        var data = EnvelopeCodec.ComputeSignedBytes(envelope);
+        var signature = encryption.Sign(data, identity.PrivateKey);
+        return envelope with { Signature = signature };
     }
 
-    private static MessageEnvelope DeserializeEnvelope(ReadOnlyMemory<byte> rawData)
+    /// <summary>
+    /// 暴露给外部（如 KeyExchangeHandler）做签名；用法与 SignEnvelope 等价但不依赖 router 实例。
+    /// </summary>
+    public MessageEnvelope SignEnvelopeWith(MessageEnvelope envelope)
     {
-        var data = rawData.Span;
-        int offset = 0;
-        var version = data[offset++];
-        var msgType = (MessageType)data[offset++];
-        uint seq = (uint)((data[offset++] << 24) | (data[offset++] << 16) | (data[offset++] << 8) | data[offset++]);
-        var senderId = data[offset..(offset + NodeId.Size)].ToArray();
-        offset += NodeId.Size;
-        var messageId = new Guid(data[offset..(offset + 16)]);
-        offset += 16;
-        long ts = ((long)data[offset++] << 56) | ((long)data[offset++] << 48) |
-                  ((long)data[offset++] << 40) | ((long)data[offset++] << 32) |
-                  ((long)data[offset++] << 24) | ((long)data[offset++] << 16) |
-                  ((long)data[offset++] << 8) | data[offset++];
-        var payload = data[offset..].ToArray();
-
-        return new MessageEnvelope
+        var identity = _keyStore.GetOrCreateIdentity();
+        var filled = envelope with
         {
-            Version = version,
-            MessageType = msgType,
-            SequenceNumber = seq,
-            SenderId = senderId,
-            MessageId = messageId,
-            Timestamp = ts,
-            Payload = payload
+            SenderId = identity.NodeId.ToByteArray(),
+            SenderPublicKey = identity.PublicKey
         };
+        return SignEnvelope(filled, identity, _encryption);
     }
+
+    /// <summary>
+    /// 验签并返回是否通过；若失败给出原因。
+    /// </summary>
+    public static bool VerifyEnvelope(MessageEnvelope envelope, IEncryptionService encryption, out string? failureReason)
+    {
+        ArgumentNullException.ThrowIfNull(encryption);
+        return VerifyEnvelopeCore(envelope, encryption, out failureReason);
+    }
+
+    private static bool VerifyEnvelopeCore(MessageEnvelope envelope, IEncryptionService encryption, out string? failureReason)
+    {
+        if (envelope.Signature == null || envelope.Signature.Length == 0)
+        {
+            failureReason = "缺少签名";
+            return false;
+        }
+        if (envelope.SenderPublicKey == null || envelope.SenderPublicKey.Length == 0)
+        {
+            failureReason = "缺少发送方公钥";
+            return false;
+        }
+
+        // 校验 SenderId 必须等于公钥派生的 NodeId —— 阻止 SenderId 冒名
+        try
+        {
+            var derivedNodeId = NodeId.FromPublicKey(envelope.SenderPublicKey).ToByteArray();
+            if (!derivedNodeId.AsSpan().SequenceEqual(envelope.SenderId))
+            {
+                failureReason = "SenderId 与 SenderPublicKey 不匹配";
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            failureReason = "SenderPublicKey 解析失败: " + ex.Message;
+            return false;
+        }
+
+        var data = EnvelopeCodec.ComputeSignedBytes(envelope);
+        if (!encryption.Verify(data, envelope.Signature, envelope.SenderPublicKey))
+        {
+            failureReason = "ECDSA 验签失败";
+            return false;
+        }
+
+        failureReason = null;
+        return true;
+    }
+
+    /// <summary>
+    /// 序列化整条信封到字节：固定头 + 长度前缀 SenderPublicKey + 长度前缀 Signature + Payload。
+    /// <para>
+    /// 实现已收敛到 <see cref="EnvelopeCodec"/>（Core 层唯一真相源）。
+    /// 本方法保留为薄封装，供既有调用方与测试继续使用。
+    /// </para>
+    /// </summary>
+    public static byte[] SerializeEnvelope(MessageEnvelope envelope) => EnvelopeCodec.Serialize(envelope);
+
+    /// <summary>
+    /// 反序列化整条信封。
+    /// <para>
+    /// 实现已收敛到 <see cref="EnvelopeCodec"/>（Core 层唯一真相源）。
+    /// 该实现带有完整的长度边界校验，畸形帧一律抛 <see cref="InvalidDataException"/>。
+    /// </para>
+    /// <para>
+    /// UI 层（<c>P2PChatTui.ReadHelloResponseAsync</c>）也必须调用同一份实现：
+    /// 阶段 3.2 引入签名后载荷前多了「4+N 公钥长度前缀」与「4+M 签名前缀」，
+    /// 任何按旧 50 字节固定头直接切 <c>Payload</c> 的副本都会解析失败。
+    /// </para>
+    /// </summary>
+    public static MessageEnvelope DeserializeEnvelope(ReadOnlyMemory<byte> rawData)
+        => EnvelopeCodec.Deserialize(rawData);
 
     private uint NextSeq() => Interlocked.Increment(ref _seqCounter);
 

@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Text;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
+using P2PChat.Chat.Routing;
 using P2PChat.Core.Abstractions;
 using P2PChat.Core.Enums;
 using P2PChat.Core.Extensions;
@@ -194,32 +195,8 @@ public class ChatService : IChatService
 
     private static MessageEnvelope DeserializeEnvelope(ReadOnlyMemory<byte> rawData)
     {
-        var data = rawData.Span;
-        var headerLength = 1 + 1 + 4 + NodeId.Size + 16 + 8;
-        if (data.Length < headerLength)
-            throw new InvalidOperationException("密钥交换响应信封不完整");
-
-        var offset = 0;
-        var version = data[offset++];
-        var messageType = (MessageType)data[offset++];
-        var sequenceNumber = BinaryPrimitives.ReadUInt32BigEndian(data.Slice(offset, 4));
-        offset += 4;
-        var senderId = data.Slice(offset, NodeId.Size).ToArray();
-        offset += NodeId.Size;
-        var messageId = new Guid(data.Slice(offset, 16));
-        offset += 16;
-        var timestamp = BinaryPrimitives.ReadInt64BigEndian(data.Slice(offset, 8));
-        offset += 8;
-
-        return new MessageEnvelope
-        {
-            Version = version,
-            MessageType = messageType,
-            SequenceNumber = sequenceNumber,
-            SenderId = senderId,
-            MessageId = messageId,
-            Timestamp = timestamp,
-            Payload = data[offset..].ToArray()
-        };
+        // 与 MessageRouter.SerializeEnvelope 对称：固定头 + 长度前缀 SenderPublicKey + 长度前缀 Signature + Payload。
+        // 直接复用 MessageRouter.DeserializeEnvelope，避免两条反序列化路径走偏。
+        return MessageRouter.DeserializeEnvelope(rawData);
     }
 }

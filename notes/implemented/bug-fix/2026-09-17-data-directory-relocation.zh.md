@@ -55,4 +55,3 @@ Status: implemented
 - **代价：既有数据不会自动迁移。** 旧位置 `<程序目录>/data/` 中的身份密钥、会话密钥、联系人不会被读取，用户升级后表现为「新身份 + 空联系人列表」。本变更未提供迁移路径；需保留旧身份时必须手工把旧 `data/` 内容复制到 `~/.p2pc/`。
 - **代价：多实例必须显式设置 `P2PCHAT_DATA_DIR`。** 忘记设置的两个实例会共用同一份 `identity.json`，表现为节点 ID 相同、互不可见。该失败模式已写入 `scripts/e2e-verify.ps1` 的说明，并由断言 A24 覆盖。
 - 数据目录由三级回退解析得出，「数据在哪」不再由单一环境变量决定，排查问题时以启动日志打印的路径为准。
-- **已知缺口（文档漂移）：** `src/P2PChat.Chat/Services/ContactService.cs` 的类注释仍写着 `持久化: %APPDATA%/P2PChat/contacts.json`，与本次迁移后的实际位置 `~/.p2pc/contacts.json` 不符。本变更未一并订正。

@@ -1,0 +1,28 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/implemented/bug-fix/2026-09-21-filetransfer-chunksize.md
+  zh: notes/implemented/bug-fix/2026-09-21-filetransfer-chunksize.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: File transfer send loop must use state.ChunkSize"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+    tokens: []
+  zh:
+    heading: "# Agent Note: 文件传输发送循环必须使用 state.ChunkSize"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+    tokens: []
+
+recorded: 2026-09-21

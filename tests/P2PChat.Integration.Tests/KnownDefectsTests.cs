@@ -9,18 +9,20 @@ using P2PChat.Crypto.Encryption;
 using P2PChat.FileTransfer.Services;
 using P2PChat.Integration.Tests.Support;
 using Shouldly;
-using Xunit.Sdk;
 
 namespace P2PChat.Integration.Tests;
 
 /// <summary>
-/// 已知缺陷复现（期望契约 vs 当前实现）。
-///
-/// 这些测试断言的是**期望的正确契约**。当当前实现不满足契约时抛出
-/// <c>Xunit.Sdk.SkipException.ForSkip(reason)</c> 动态标记为 Skipped —— 跳过原因里包含可复现的机制与观测值。
-/// 缺陷修复后这些测试会自动转为 Passed（不再抛 SkipException）。
+/// 历史缺陷回归守卫 —— 已修复缺陷的「锁死」测试集。
 /// <para>
-/// 重要：Skipped ≠ Passed。测试统计里它们显示为 skipped，不算绿。
+/// 来源：2026-09-17 之前的「已知缺陷」列表（6 个）。这些缺陷随 REPAIR-PLAN 阶段 0 / 阶段 1 / 阶段 3 全部修复。
+/// 本文件保留并重写为「回归守卫」模式：每条测试断言「缺陷不重现」的具体契约，任一条改回旧实现即变红。
+/// </para>
+/// <para>
+/// 旧版本曾在主断言失败时通过 <see cref="Xunit.Sdk.SkipException.ForSkip(string)"/> 把测试标记为 Skipped，
+/// 并在跳过原因里写入当时源码位置（如 <c>ChatService.cs:116</c>）。修复完成后那些跳过分支已经不可达，
+/// 仍引用旧行号/旧行为的描述属于「误导性文档」 —— 4.5 子任务删除了所有这些死分支，并把测试名/注释
+/// 改成「已修复 — 锁死回归」的现时语义。
 /// </para>
 /// </summary>
 [Trait("Category", "KnownDefect")]
@@ -35,8 +37,18 @@ public class KnownDefectsTests
         Payload = []
     };
 
+    /// <summary>
+    /// 回归守卫 #1 — 密钥交换后双方会话密钥必须字节级一致。
+    /// <para>
+    /// 历史缺陷：ChatService.PerformKeyExchangeAsync 曾经把【本地临时私钥】直接当会话密钥写入 keyStore，
+    /// 且从不回送 IsResponse=true 的响应 —— A 侧拿到的是既非共享密钥也对端无法推导的值。
+    /// 修法：发起方暂存临时私钥 → 等待对端 IsResponse=true 的响应 → 用对端临时公钥做 ECDH → HKDF 派生会话密钥。
+    /// 参见 <c>notes/implemented/bug-fix/2026-09-20-message-sender-identity.md</c>（SenderId 真实身份）
+    /// 与 <c>notes/implemented/bug-fix/2026-09-21-message-signing.md</c>（SenderId 防冒名）。
+    /// </para>
+    /// </summary>
     [Fact]
-    public async Task 缺陷1_密钥交换后_双方会话密钥应当相同()
+    public async Task 回归守卫1_密钥交换后_双方会话密钥应当相同()
     {
         await using var alice = NodeHarness.Start("alice");
         await using var bob = NodeHarness.Start("bob");
@@ -48,22 +60,20 @@ public class KnownDefectsTests
         var aliceKey = alice.KeyStore.GetSessionKey(bob.LocalNode.NodeId);
         var bobKey = bob.KeyStore.GetSessionKey(new NodeId(alice.SenderId));
 
-        if (aliceKey == null || bobKey == null || !aliceKey.SequenceEqual(bobKey))
-        {
-            throw SkipException.ForSkip(
-                $"已知缺陷#1 会话密钥双方不一致：alice侧={(aliceKey == null ? "null" : aliceKey.Length + "B")}, " +
-                $"bob侧={(bobKey == null ? "null" : bobKey.Length + "B")}。" +
-                "机制：ChatService.PerformKeyExchangeAsync 把【本地临时私钥】直接当作会话密钥写入 keyStore " +
-                "(src/P2PChat.Chat/Services/ChatService.cs:116 `SetSessionKey(recipient.NodeId, ephemeralKey.PrivateKey)`)，" +
-                "并且从未回送 IsResponse=true 的 KeyExchange 响应，A 侧永远拿不到 B 的临时公钥，" +
-                "因此 A 侧存的既不是共享密钥也不是对端能推导出的值。修复方向：暂存临时私钥→回送响应→收到响应后用 ECDH 派生会话密钥。");
-        }
-
-        aliceKey!.ShouldBe(bobKey!);
+        aliceKey.ShouldNotBeNull();
+        bobKey.ShouldNotBeNull();
+        aliceKey.ShouldBe(bobKey, "双方会话密钥必须字节级一致 —— 这是 ECDH+HKDF 派生路径正确的最小证据");
     }
 
+    /// <summary>
+    /// 回归守卫 #2 — 私聊处理器收到密文后必须解密还原明文，绝不能原样转发 Base64。
+    /// <para>
+    /// 历史缺陷：PrivateMessageHandler 曾经只校验「会话密钥存在」而不实际调用 Decrypt，
+    /// 导致 Content 原样（Base64 密文）落到 ChatMessageEvent，UI 看到的是一串不可读的 Base64。
+    /// </para>
+    /// </summary>
     [Fact]
-    public async Task 缺陷2_私聊处理器应当解密收到的密文()
+    public async Task 回归守卫2_私聊处理器应当解密收到的密文()
     {
         var encryption = new AesGcmEncryptionService(NullLogger<AesGcmEncryptionService>.Instance);
         var keyStore = new InMemoryKeyStore(encryption);
@@ -92,38 +102,35 @@ public class KnownDefectsTests
         }
 
         received.ShouldNotBeNull();
-        if (received!.Content == content)
-        {
-            throw SkipException.ForSkip(
-                "已知缺陷#2 私聊消息未解密：PrivateMessageHandler.HandleAsync 把 message.Content 直接当明文使用 " +
-                "(src/P2PChat.Chat/Handlers/PrivateMessageHandler.cs:48-50 注释『为了简化, 当前TextMessage.Content直接是明文』)，" +
-                "会话密钥只用于 `GetSessionKey(...) != null` 的存在性检查，未参与任何加解密。" +
-                "观测：处理器原样回传了 Base64 密文而非常量明文。");
-        }
-
-        received.Content.ShouldBe(plaintext);
+        received.Content.ShouldBe(plaintext, "密文必须被 AES-256-GCM 解密还原成明文");
+        received.Content.ShouldNotBe(content, "Content 不得保留为 Base64 密文");
     }
 
+    /// <summary>
+    /// 回归守卫 #3 — 群组邀请处理器必须接受合法加密邀请并写入 32B 群密钥，
+    /// 同时必须丢弃「无元数据 / 非法公钥长度 / 缺 nonce-tag」等历史遗留明文回退路径。
+    /// <para>
+    /// 双向覆盖：正向（合法邀请被接受）+ 负向（旧格式邀请被拒绝且不发布 OnInviteReceived）。
+    /// </para>
+    /// </summary>
     [Fact]
-    public async Task 缺陷3_群组邀请处理器应当存储群组密钥()
+    public async Task 回归守卫3_群组邀请处理器应当存储群组密钥_并拒绝旧格式明文回退路径()
     {
         await using var alice = NodeHarness.Start("alice");
         await using var bob = NodeHarness.Start("bob");
         alice.Discover(bob);
 
-        // ---- 正向：真实的加密邀请必须被接受 ----------------------------------
-        // 走真实发送路径：GroupChatService.CreateGroupAsync 用发送方身份私钥 + 接收方公钥
-        // 做 ECDH → HKDF 派生出包装密钥，再用 AES-256-GCM 包装 32B 群密钥，
-        // 并填充 SenderPublicKey(91B) 与 EncryptedGroupKeyNonceAndTag(28B)。
+        // ---- 正向：真实加密邀请必须被接受 ---------------------------------
         var group = await alice.Group.CreateGroupAsync("加密邀请群", [bob.LocalNode.NodeId]);
 
         var stored = await WaitForGroupKeyAsync(bob, group.GroupId);
         stored.ShouldNotBeNull("合法的加密邀请必须被接受并写入 keyStore");
         stored!.Length.ShouldBe(32);
-        stored.ShouldBe(group.GroupKey);   // 接收方密钥必须逐字节等于发送方使用的 32B 群密钥
+        stored.ShouldBe(group.GroupKey,   // 接收方密钥必须逐字节等于发送方使用的 32B 群密钥
+            "接收方密钥必须逐字节等于发送方使用的 32B 群密钥");
 
-        // ---- 负向（安全加固回归守卫）：旧格式明文邀请必须被丢弃 ----------------
-        // 一旦有人把"无元数据的 32B 明文 / 公钥 SHA-256 / 缺 nonce-tag"这些兼容回退路径改回来，
+        // ---- 负向（安全加固回归守卫）：旧格式明文邀请必须被丢弃 ------------
+        // 一旦有人把"无元数据的 32B 明文 / 非法公钥长度 / 缺 nonce-tag"这些兼容回退路径改回来，
         // 下面三条中的任意一条都会立刻变红。
         const string legacyNoMetadata = "legacy-group-no-metadata";
         await bob.InviteHandler.HandleAsync(
@@ -204,10 +211,18 @@ public class KnownDefectsTests
         return received;
     }
 
+    /// <summary>
+    /// 回归守卫 #4 — 文件传输实际分块大小必须等于元数据声明的 ChunkSize（不再用 65536 默认值）。
+    /// <para>
+    /// 历史缺陷：FileTransferService.HandleFileMetaAsync 完全忽略 meta.ChunkSize，
+    /// HandleFileChunkAsync 用默认 65536 计算写入偏移 —— 任意非默认 ChunkSize 都会被写到错位偏移，
+    /// 字节级重组失败、SHA-256 校验失败。修复后 state.ChunkSize 必须来自 meta.ChunkSize。
+    /// </para>
+    /// </summary>
     [Fact]
-    public async Task 缺陷4_文件传输应当采用元数据声明的分块大小()
+    public async Task 回归守卫4_文件传输应当采用元数据声明的分块大小()
     {
-        var root = Path.Combine(Path.GetTempPath(), "p2pchat-defect4-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(Path.GetTempPath(), "p2pchat-regression-4-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
@@ -225,7 +240,7 @@ public class KnownDefectsTests
             const int customChunk = 1024;
             var data = new byte[customChunk * 4];
             Random.Shared.NextBytes(data);
-            const string transferId = "defect4";
+            const string transferId = "regression-4";
             var saveDir = Path.Combine(root, "recv");
 
             await receiver.HandleFileMetaAsync(new FileMetaMessage
@@ -248,17 +263,8 @@ public class KnownDefectsTests
             }
 
             var saved = await File.ReadAllBytesAsync(Path.Combine(saveDir, "d.bin"));
-            if (!saved.SequenceEqual(data))
-            {
-                throw SkipException.ForSkip(
-                    $"已知缺陷#4 文件分块偏移错位：meta.ChunkSize={customChunk} 未写入 TransferState " +
-                    "(src/P2PChat.FileTransfer/Services/FileTransferService.cs:158-168 HandleFileMetaAsync 完全忽略 meta.ChunkSize)，" +
-                    "HandleFileChunkAsync 用 state.ChunkSize 的默认值 65536 计算 offset = ChunkIndex * 65536，" +
-                    $"导致 4 个 1024B 分块被写到 0/65536/131072/196608 偏移处。观测：源文件 {data.Length}B，接收文件 {saved.Length}B，" +
-                    "内容不一致，SHA-256 校验随之失败。当前恰好能用只因为发送端 DefaultChunkSize 也是 65536。");
-            }
-
-            saved.ShouldBe(data);
+            saved.ShouldBe(data,
+                $"接收端文件必须字节级等于源文件：meta.ChunkSize={customChunk} 必须真实控制偏移与分块");
         }
         finally
         {
@@ -266,8 +272,16 @@ public class KnownDefectsTests
         }
     }
 
+    /// <summary>
+    /// 回归守卫 #5 — 端到端私聊：线路上传输的 TextMessage.Content 必须是 AES-256-GCM 密文的 Base64，
+    /// 且接收端必须能解密还原明文。
+    /// <para>
+    /// 历史缺陷：曾经把明文直接放到 Content 字段上线，捕获的 MessagePack 字节里能直接看到 UTF-8 序列。
+    /// 修复后：发送端走 AES-256-GCM 加密 → Base64；接收端解密；线路不得包含明文 UTF-8。
+    /// </para>
+    /// </summary>
     [Fact]
-    public async Task 缺陷5_端到端私聊_线路载荷必须是密文且接收端解密后内容一致()
+    public async Task 回归守卫5_端到端私聊_线路载荷必须是密文且接收端解密后内容一致()
     {
         await using var alice = NodeHarness.Start("alice");
         await using var bob = NodeHarness.Start("bob");
@@ -285,12 +299,8 @@ public class KnownDefectsTests
 
         var plaintextUtf8 = Encoding.UTF8.GetBytes(plaintext);
         var leaked = captured.Where(c => ContainsSubsequence(c.Payload, plaintextUtf8)).ToList();
-        if (leaked.Count > 0)
-        {
-            throw SkipException.ForSkip(
-                $"已知缺陷#5 端到端加密私聊不成立：捕获到 {leaked.Count} 条出站载荷的 MessagePack 字节中直接包含明文 UTF-8 序列" +
-                $"（明文 {plaintextUtf8.Length} 字节）。说明消息内容在 TCP 链路上以明文传递，接收端无需解密即可读取。");
-        }
+        leaked.ShouldBeEmpty(
+            $"线路上不得包含明文 UTF-8 序列 —— 当前捕获到 {leaked.Count} 条载荷明文泄漏");
 
         // (2) 线路上的 TextMessage.Content 必须是 AES-256-GCM 密文的 Base64，而不是明文
         var sentTexts = captured.Select(c => c.Message).OfType<TextMessage>().ToList();
@@ -304,10 +314,9 @@ public class KnownDefectsTests
             {
                 cipher = Convert.FromBase64String(text.Content);
             }
-            catch (FormatException ex)
+            catch (FormatException)
             {
-                throw SkipException.ForSkip(
-                    $"已知缺陷#5 线路载荷不符合密文契约：TextMessage.Content 不是合法 Base64 —— {ex.Message}");
+                throw new ShouldAssertException("线路载荷不符合密文契约：TextMessage.Content 不是合法 Base64");
             }
 
             cipher.Length.ShouldBe(
@@ -346,10 +355,18 @@ public class KnownDefectsTests
         throw new TimeoutException($"等待消息超时 ({timeoutMs}ms)");
     }
 
+    /// <summary>
+    /// 回归守卫 #6 — 文件传输最后一块的完成校验不得在 FileStream 句柄仍持有时触发二次打开。
+    /// <para>
+    /// 历史缺陷：HandleFileChunkAsync 在 <c>await using var fs = new FileStream(...)</c> 作用域尚未释放时
+    /// 就调用 VerifyAndCompleteAsync，后者用 File.OpenRead 再次打开同一文件；Windows 上两个句柄的
+    /// FileShare 不兼容（Write+Share.Read vs Read+Share.Read）→ IOException。修复后校验发生在 using 之外。
+    /// </para>
+    /// </summary>
     [Fact]
-    public async Task 缺陷6_文件传输最后一块的完成校验_不应抛文件占用异常()
+    public async Task 回归守卫6_文件传输最后一块的完成校验_不应抛文件占用异常()
     {
-        var root = Path.Combine(Path.GetTempPath(), "p2pchat-defect6-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(Path.GetTempPath(), "p2pchat-regression-6-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
@@ -366,7 +383,7 @@ public class KnownDefectsTests
 
             var data = new byte[2048];
             Random.Shared.NextBytes(data);
-            const string transferId = "defect6";
+            const string transferId = "regression-6";
             var saveDir = Path.Combine(root, "recv");
 
             await receiver.HandleFileMetaAsync(new FileMetaMessage
@@ -377,38 +394,21 @@ public class KnownDefectsTests
             }, new FakeTcpConnection());
             await receiver.AcceptTransferAsync(transferId, saveDir);
 
-            string? ioError = null;
-            try
+            // HandleFileChunkAsync 内部若再开 FileStream 读校验，FileShare 不兼容 → IOException
+            await receiver.HandleFileChunkAsync(new FileChunkMessage
             {
-                await receiver.HandleFileChunkAsync(new FileChunkMessage
-                {
-                    SenderId = SenderId20(), ConversationId = "c", TransferId = transferId,
-                    ChunkIndex = 0, Data = data
-                });
-            }
-            catch (IOException ex)
-            {
-                ioError = ex.Message;
-            }
+                SenderId = SenderId20(), ConversationId = "c", TransferId = transferId,
+                ChunkIndex = 0, Data = data
+            });
 
-            if (ioError != null)
-            {
-                throw SkipException.ForSkip(
-                    "已知缺陷#6 文件传输完成校验必然抛异常：HandleFileChunkAsync 在 " +
-                    "`await using var fs = new FileStream(SavePath, FileMode.Open, FileAccess.Write)` 的 using 作用域【尚未释放】时，" +
-                    "就调用 VerifyAndCompleteAsync，后者用 File.OpenRead(SavePath) 再次打开同一文件；" +
-                    "Windows 上两个句柄的 FileShare 互不兼容（已有句柄 Write+Share.Read，新句柄 Read+Share.Read）→ " +
-                    $"抛 IOException: \"{ioError}\"。" +
-                    "后果：state.Status 永远不会变成 Completed，OnProgressChanged 也不会收到 completed，文件传输功能整体不可用。" +
-                    "修复方向：把校验放到 using 作用域之外，或直接用已打开的 fs 计算哈希。");
-            }
-
+            // 状态必须走到 completed（不再因 IOException 落入 error）
             using var cts = new CancellationTokenSource(10000);
             await foreach (var progress in receiver.OnProgressChanged.WithCancellation(cts.Token))
             {
                 if (progress.Status is "completed" or "error")
                 {
-                    progress.Status.ShouldBe("completed");
+                    progress.Status.ShouldBe("completed",
+                        "最后一块落盘后状态必须是 completed，不得因文件占用异常陷入 error");
                     break;
                 }
             }

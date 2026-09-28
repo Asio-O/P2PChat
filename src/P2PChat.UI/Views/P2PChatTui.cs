@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
+using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using P2PChat.Core.Abstractions;
 using P2PChat.Core.Enums;
+using P2PChat.Core.Extensions;
 using P2PChat.Core.Models;
 using static P2PChat.UI.Views.ConsoleScreen;
 
@@ -17,7 +19,9 @@ public sealed class P2PChatTui(
     IContactService contactService,
     IFileTransferService fileTransferService,
     IDhtService dhtService,
+    IMessageRouter router,
     IKeyStore keyStore,
+    IEncryptionService encryption,
     ILogger<P2PChatTui> logger) : IDisposable
 {
     private const int MaxHistory = 500;                    // 每个会话保留的历史行数
@@ -40,12 +44,38 @@ public sealed class P2PChatTui(
     private string _currentChatTitle = "未选择会话 - 使用 /help 查看命令";
     private volatile string _dhtStatus = "DHT: --";
     private volatile bool _isGroupChat, _dirty = true, _running, _plainMode;
+
+    /// <summary>
+    /// 线性（plain）模式的行式输入通道。
+    /// <para>
+    /// plain 模式没有可用的控制台按键事件（<see cref="ReadKeyOrNull"/> 直接返回 <c>null</c>），
+    /// 因此 stdin 只能按「行」读取。后台任务 <see cref="ReadPlainInputAsync"/> 阻塞在
+    /// <see cref="Console.ReadLine()"/> 上，把读到的行投递到这里，主循环消费后走与
+    /// <see cref="SubmitInput"/> 完全相同的命令分派路径。
+    /// </para>
+    /// <para>
+    /// 与 plain 模式的输出语义（<see cref="DrainInbox"/> 逐行 <c>Console.WriteLine</c>）对称，
+    /// 使 <c>P2PCHAT_PLAIN=1</c> / stdout 被重定向 / CI 等场景下程序仍然可用。
+    /// </para>
+    /// </summary>
+    private readonly Channel<string> _plainInput = Channel.CreateUnbounded<string>();
+
+    /// <summary>
+    /// <see cref="ReadPlainInputAsync"/> 是否已启动（0=否）。用 <see cref="Interlocked"/> 保证幂等。
+    /// </summary>
+    private int _plainInputStarted;
+
     private string _input = string.Empty;
     private int _contactIndex, _scrollFromEnd;
     private bool _disposed;
     /// <summary>启动 TUI；P2PCHAT_SELFTEST=1 时只打印自检信息后立即返回（不进入阻塞输入循环）</summary>
     public async Task RunAsync(CancellationToken ct = default)
     {
+        // P2PCHAT_PLAIN=1 强制启用「线性输出」模式：每条聊天消息逐行写入 stdout，
+        // 供 e2e-verify.ps1 之类的脚本直接抓取明文断言。
+        // 默认只有控制台初始化失败才会进入该模式（参见下方 catch）。
+        if (Environment.GetEnvironmentVariable("P2PCHAT_PLAIN") == "1") _plainMode = true;
+
         RefreshDhtStatus();
         await RefreshContactsAsync(ct);
         if (Environment.GetEnvironmentVariable("P2PCHAT_SELFTEST") == "1") { await RunSelfTestAsync(ct); return; }
@@ -55,6 +85,7 @@ public sealed class P2PChatTui(
         _ = ProcessIncomingMessagesAsync(ct);   // 后台循环 1：接收聊天消息
         _ = ProcessFileOffersAsync(ct);         // 后台循环 2：接收文件 Offer
         _ = RefreshDhtPeriodicallyAsync(ct);    // 后台循环 3：周期性刷新 DHT / 在线状态
+        EnsurePlainInputStarted(ct);   // 后台循环 4：行式 stdin（plain 模式专用；幂等，中途降级也会补启动）
         try
         {
             while (_running && !ct.IsCancellationRequested)
@@ -63,6 +94,13 @@ public sealed class P2PChatTui(
                 Render();
                 var key = ReadKeyOrNull();
                 if (key is { } k) { HandleKey(k); continue; }
+                // plain 模式没有按键事件，改为消费后台读到的整行命令。
+                // 先 Ensure：_plainMode 可能在运行中途才被降级路径翻成 true。
+                if (_plainMode)
+                {
+                    EnsurePlainInputStarted(ct);
+                    if (_plainInput.Reader.TryRead(out var line)) { SubmitLine(line); continue; }
+                }
                 try { await Task.Delay(50, ct); } catch (OperationCanceledException) { break; }
             }
         }
@@ -73,7 +111,7 @@ public sealed class P2PChatTui(
             Console.WriteLine("P2PChat 已退出");
         }
     }
-    /// <summary>非交互自检：打印节点ID / 监听端口 / DHT已知节点数 / 联系人 / 群组数</summary>
+    /// <summary>非交互自检：打印节点ID / 监听端口 / DHT已知节点数 / 联系人 / 群组数 / 宣告状态</summary>
 
     private async Task RunSelfTestAsync(CancellationToken ct)
     {
@@ -93,6 +131,24 @@ public sealed class P2PChatTui(
         Console.WriteLine($"DHT已知节点: {dhtService.GetAllKnownNodes().Count}");
         Console.WriteLine($"联系人:     {contacts}");
         Console.WriteLine($"群组:       {groupChatService.GetKnownGroups().Count}");
+        // 宣告 (Phase 1.1)：MainlineDhtService.BootstrapAsync 会立即尝试一次 announce_peer，
+        // 然后随 RefreshLoopAsync 每 15 分钟重复一次。状态字段挂在 IDhtService 接口上，
+        // 不需要 UI 直接引用 Networking 项目。
+        var lastAnnounce = dhtService.LastAnnounceUtc;
+        var lastText = lastAnnounce == DateTime.MinValue
+            ? "(尚未完成首次宣告)"
+            : lastAnnounce.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+        Console.WriteLine($"宣告状态:   已宣告节点数={dhtService.AnnouncedPeerCount}, 最近一次={lastText}");
+        // Phase 2 / 2.3: NAT 穿透状态。无 UPnP 时显式标注可达性范围，不静默失败。
+        var natState = dhtService.NatMappingState;
+        var natText = natState switch
+        {
+            NatMappingState.NotAttempted => "(未尝试 UPnP)",
+            NatMappingState.Mapped => $"已映射 → 公网 {dhtService.LocalExternalEndPoint}",
+            NatMappingState.Unavailable => "无 UPnP —— 仅同网段/公网可达方可主动连入",
+            _ => natState.ToString()
+        };
+        Console.WriteLine($"UPnP 状态:  {natState} ({natText})");
         Console.WriteLine("自检完成:   OK");
         Console.Out.Flush();
     }
@@ -102,6 +158,55 @@ public sealed class P2PChatTui(
         try { return Console.KeyAvailable ? Console.ReadKey(intercept: true) : null; }
         catch (Exception) { _plainMode = true; return null; }
     }
+    /// <summary>
+    /// 幂等地启动 plain 模式的行式 stdin 读取（后台循环 4）。
+    /// <para>
+    /// <b>必须惰性启动</b>。<c>_plainMode</c> 有三条进入路径，其中
+    /// <see cref="ReadKeyOrNull"/> 的 <c>catch</c> 与 <see cref="Render"/> 的
+    /// <c>InvalidOperationException</c> 降级都可能在<b>运行中途</b>才把它翻成 <c>true</c>。
+    /// 若只在 <c>RunAsync</c> 开头判断一次，程序会退化回修复前的老症状：
+    /// 永远读不到按键、stdin 读取任务又没启动 —— 静默无输入，且此时通道永不完成、
+    /// 主循环只会空转，连 EOF 都不会退出。
+    /// </para>
+    /// <para>
+    /// 用 <see cref="Interlocked.Exchange(ref _plainInputStarted, 1)"/> 做「检查并置位」的原子化，
+    /// 避免主循环每 50ms 重复启动一个阻塞在 <c>Console.ReadLine()</c> 的任务。
+    /// </para>
+    /// </summary>
+    private void EnsurePlainInputStarted(CancellationToken ct)
+    {
+        if (!_plainMode) return;
+        if (Interlocked.Exchange(ref _plainInputStarted, 1) != 0) return;
+        logger.LogDebug("plain 模式：启动后台 stdin 读取任务");
+        _ = ReadPlainInputAsync(ct);
+    }
+
+    /// <summary>
+    /// 后台循环 4：plain 模式按行读取 stdin，把整行命令投递进 <see cref="_plainInput"/>。
+    /// <para>
+    /// <see cref="Console.ReadLine()"/> 是阻塞调用，因此必须放在后台任务上，绝不能占用主循环。
+    /// 读到 <c>null</c> 表示 stdin 已关闭（EOF，例如脚本注入完毕后关闭管道），此时结束通道，
+    /// 让 <c>TryRead</c> 恒返回 <c>false</c> 而不会自旋。
+    /// </para>
+    /// </summary>
+    private async Task ReadPlainInputAsync(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                var line = await Task.Run(() => Console.ReadLine(), ct).ConfigureAwait(false);
+                logger.LogDebug("plain 模式：stdin 读到 {IsEof} (长度 {Len})",
+                    line is null, line?.Length ?? -1);
+                if (line is null) break;                 // stdin 已 EOF
+                if (line.Length > 0) await _plainInput.Writer.WriteAsync(line, ct).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { logger.LogDebug(ex, "线性模式 stdin 读取结束"); }
+        finally { _plainInput.Writer.TryComplete(); }
+    }
+
     private void HandleKey(ConsoleKeyInfo key)
     {
         switch (key.Key)
@@ -127,6 +232,15 @@ public sealed class P2PChatTui(
         var text = _input.Trim();
         _input = string.Empty;
         MarkDirty();
+        SubmitLine(text);
+    }
+    /// <summary>
+    /// 提交一行用户输入（<c>Enter</c> 键或 plain 模式的整行 stdin）。
+    /// 交互模式与线性模式共用此分派，保证两条路径的命令语义完全一致。
+    /// </summary>
+    private void SubmitLine(string text)
+    {
+        text = text.Trim();
         if (text.Length == 0) return;
         if (text[0] == '/') _ = Task.Run(() => ProcessCommandAsync(text));
         else if (_currentConversationId.Length > 0) _ = Task.Run(() => SendMessageAsync(text));
@@ -164,12 +278,13 @@ public sealed class P2PChatTui(
         var args = parts.Length > 1 ? parts[1] : "";
         try
         {
-            if (cmd is "msg" or "pm" or "file" or "add" or "accept" or "reject" or "group" && args.Length == 0)
+            if (cmd is "msg" or "pm" or "file" or "add" or "accept" or "reject" or "group" or "connect" && args.Length == 0)
             {
                 AddSystemMessage(cmd is "msg" or "pm" ? "用法: /msg <联系人|节点ID> <消息>"
                     : cmd == "file" ? "用法: /file send <联系人> <文件路径>"
                     : cmd == "add" ? "用法: /add <节点ID(hex,40位)> [ip:port] [别名]"
                     : cmd is "accept" or "reject" ? $"用法: /{cmd} <传输ID>"
+                    : cmd == "connect" ? "用法: /connect <ip:port>（不需知道对端节点ID）"
                     : "用法: /group create <名称> 或 /group send <ID> <消息>");
                 return;
             }
@@ -179,6 +294,7 @@ public sealed class P2PChatTui(
                 case "group": await HandleGroupCommandAsync(args); break;
                 case "file": await HandleFileCommandAsync(args); break;
                 case "add": await AddContactCommandAsync(args); break;
+                case "connect": await ConnectCommandAsync(args); break;
                 case "id" or "me": ShowNodeInfo(); break;
                 case "net" or "dht": ShowDhtStatus(); break;
                 case "contacts": await ShowContactsListAsync(); break;
@@ -325,7 +441,9 @@ public sealed class P2PChatTui(
             {
                 NodeId = nodeId,
                 EndPoint = endPoint,
-                PublicKey = [],
+                // 手工 /add 只知道 ip:port，对端长期公钥未知 → 显式 null（而不是空数组占位）。
+                // 需要它的地方（群邀请包装群密钥）会主动握手取回。
+                PublicKey = null,
                 State = PeerState.Online
             });
             AddSystemMessage($"已添加联系人: {alias} ({Short(nodeId.ToHexString())}) @ {endPointText}");
@@ -336,6 +454,167 @@ public sealed class P2PChatTui(
             AddSystemMessage($"已添加联系人: {alias} ({Short(nodeId.ToHexString())})");
             AddSystemMessage("提示: 未指定 ip:port。公共 DHT 无法发现任意节点，发送时很可能报「目标节点未找到」。");
             AddSystemMessage("      建议改用: /add <节点ID> <ip:port> [别名]");
+        }
+    }
+    /// <summary>
+    /// <c>/connect <ip:port></c> —— 不预先知道对端节点 ID 的直连。
+    /// <para>
+    /// 思路：构造一个 NodeId 随机但 EndPoint 已知的临时 <see cref="NodeInfo"/>，
+    /// 通过路由器建立一条 TCP 连接，发一次 <see cref="KeyExchangeMessage"/> 充当 hello；
+    /// 读取对端的响应信封，从中拿到 <c>envelope.SenderId</c> = 对端真实 NodeId
+    /// （由 <see cref="Handlers.KeyExchangeHandler"/> 写入），随后：
+    /// </para>
+    /// <list type="number">
+    ///   <item>用本地临时私钥 + 响应中的对端临时公钥派生会话密钥并写入 <see cref="IKeyStore"/>；</item>
+    ///   <item>以「真实 NodeId + 已知 ip:port」重新登记为静态对端；</item>
+    ///   <item>作为联系人落盘（若尚不存在）。</item>
+    /// </list>
+    /// <para>
+    /// 之后 <c>/msg <别名> <消息></c> 会直接命中 <see cref="IDhtService.FindNodeAsync"/> 中的静态对端，
+    /// 跳过 DHT 查找与会话密钥重协商。
+    /// </para>
+    /// <para>
+    /// 临时连接本身在使用后立刻关闭 —— 路由器连接池以 NodeId 为键，下一次 /msg
+    /// 会以「真实 NodeId」重新建立连接，因此原连接不进入池。
+    /// </para>
+    /// </summary>
+    private async Task ConnectCommandAsync(string args)
+    {
+        var tokens = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length != 1)
+        {
+            AddSystemMessage("用法: /connect <ip:port>");
+            return;
+        }
+        if (!Core.Extensions.EndpointText.TryParse(tokens[0], out var endPoint))
+        {
+            AddSystemMessage($"无法解析端点: {tokens[0]}（必须是字面 ip:port，不做 DNS）");
+            return;
+        }
+
+        var identity = keyStore.GetOrCreateIdentity();
+        var ephemeral = encryption.GenerateKeyPair();
+        var tempId = NodeId.CreateRandom();
+        var probeInfo = new NodeInfo
+        {
+            NodeId = tempId,
+            EndPoint = endPoint,
+            // 未知就是未知：这里**不能**填本机公钥。probeInfo 描述的是对端，
+            // 填本机公钥会让 NodeId.FromPublicKey(PublicKey) 算出我们的 NodeId 而不是对端的。
+            // MessageRouter.GetOrCreateConnectionAsync 只用 NodeId + EndPoint，null 无影响。
+            PublicKey = null,
+            State = PeerState.Online
+        };
+
+        AddSystemMessage($"尝试直连 {endPoint}，等待 hello 响应（最长 10s）...");
+        logger.LogInformation("/connect 发起 hello 到 {EndPoint}", endPoint);
+
+        ITcpConnection? connection = null;
+        var swHello = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            using var helloCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            connection = await router.GetOrCreateConnectionAsync(probeInfo, helloCts.Token);
+            var hello = new KeyExchangeMessage
+            {
+                SenderId = identity.NodeId.ToByteArray(),
+                ConversationId = $"connect-{tempId.ToHexString()[..8]}",
+                EphemeralPublicKey = ephemeral.PublicKey,
+                IsResponse = false
+            };
+            await router.SendViaConnectionAsync(connection, hello, helloCts.Token);
+
+            var (response, peerPublicKey) = await ReadHelloResponseAsync(connection, helloCts.Token);
+            var peerId = new NodeId(response.SenderId);
+            var peerHex = peerId.ToHexString();
+
+            // 用响应中的对端临时公钥派生会话密钥，双方 ECDH 派生结果一致。
+            var sharedSecret = encryption.DeriveSharedSecret(ephemeral.PrivateKey, response.EphemeralPublicKey);
+            var sessionKey = encryption.DeriveSessionKey(sharedSecret);
+            keyStore.SetSessionKey(peerId, sessionKey);
+
+            // 重新登记为「真实 NodeId + 已知端点」的静态对端：连接池下一次会用真 ID 建连。
+            dhtService.RegisterStaticPeer(new NodeInfo
+            {
+                NodeId = peerId,
+                EndPoint = endPoint,
+                // 这里**能**拿到对端真实长期公钥：hello 响应是一条已通过 MessageRouter 验签的
+                // 签名信封，其 SenderPublicKey 被纳入 ECDSA 签名覆盖，且
+                // VerifyEnvelopeCore 已强制 NodeId.FromPublicKey(公钥) == SenderId —— 即公钥与身份已绑定。
+                // （历史上这里填的是**本机**公钥当「占位」，会让任何 NodeId.FromPublicKey(node.PublicKey)
+                //   算出来的都是我们的 NodeId，对端防冒名守卫在路由表/静态对端层形同虚设。）
+                // 取不到时才为 null，由 GroupChatService 在需要包装群密钥时主动握手取回。
+                PublicKey = peerPublicKey,
+                State = PeerState.Online
+            });
+
+            // 联系人落盘
+            var alias = $"peer-{peerHex[..8]}";
+            var existing = contactService.FindByNodeId(peerId);
+            if (existing is null)
+            {
+                await contactService.AddContactAsync(peerId, alias, Core.Extensions.EndpointText.Format(endPoint));
+                await RefreshContactsAsync();
+            }
+            else
+            {
+                alias = existing.Alias;
+            }
+
+            AddSystemMessage($"已连接到 {endPoint}（耗时 {swHello.ElapsedMilliseconds}ms）");
+            AddSystemMessage($"对端 NodeId: {peerHex}");
+            AddSystemMessage($"已登记为静态对端 + 联系人（{alias}），可使用 /msg {alias} <消息>");
+            logger.LogInformation("/connect 成功: peer {Peer} @ {EndPoint}", peerHex, endPoint);
+        }
+        catch (OperationCanceledException)
+        {
+            AddSystemMessage($"/connect 超时：{endPoint} 在 10s 内未回应 hello");
+            logger.LogWarning("/connect 超时: {EndPoint}", endPoint);
+        }
+        catch (Exception ex)
+        {
+            AddSystemMessage($"/connect 失败: {ex.Message}");
+            logger.LogWarning(ex, "/connect 失败: {EndPoint}", endPoint);
+        }
+        finally
+        {
+            if (connection is not null)
+            {
+                try { await connection.DisposeAsync(); } catch { }
+            }
+        }
+    }
+    /// <summary>
+    /// 沿给定 TCP 连接读取消息，直到拿到 <see cref="KeyExchangeMessage.IsResponse"/> = true 的应答，
+    /// 其他类型（理论上不应出现）静默丢弃并继续读取。
+    /// 镜像 <c>ChatService.ReadKeyExchangeResponseAsync</c> 的语义但只取本节点的 hello 响应。
+    /// <para>
+    /// <b>⚠️ 信封格式只有一份实现</b>：必须用 <c>Core.Extensions.EnvelopeCodec</c>，
+    /// 绝不能在本文件里再抄一份解析器。历史事故：本文件曾自带一份「50 字节固定头直接切
+    /// Payload」的解析器副本，阶段 3.2 引入签名（公钥长度前缀 + 签名前缀）后没有同步更新，
+    /// 导致 <c>/connect &lt;ip:port&gt;</c> 盲连接的 hello 响应必然解析失败。
+    /// UI 层不引用 Chat 层，所以正确解法是把编解码收敛到 Core 依赖图的根，而不是再抄一份。
+    /// </para>
+    /// <para>
+    /// 返回值第二项是对端的<b>长期公钥</b>，取自该条已验签响应信封的
+    /// <c>MessageEnvelope.SenderPublicKey</c>。它被纳入 ECDSA 签名覆盖，且
+    /// <c>MessageRouter.VerifyEnvelopeCore</c> 已强制
+    /// <c>NodeId.FromPublicKey(公钥) == SenderId</c>，因此「公钥 ↔ 身份」的绑定是可信的。
+    /// 载荷里的 <c>message.SenderId</c> 是对端可控输入，<b>不能</b>用来推导身份。
+    /// </para>
+    /// </summary>
+    private async Task<(KeyExchangeMessage Message, byte[]? SenderPublicKey)> ReadHelloResponseAsync(
+        ITcpConnection connection, CancellationToken ct)
+    {
+        var serializer = new MessagePackSerializer();
+        while (true)
+        {
+            var raw = await connection.ReceiveMessageAsync(ct);
+            var envelope = EnvelopeCodec.Deserialize(raw);
+            if (envelope.MessageType != MessageType.KeyExchange) continue;
+            var msg = serializer.Deserialize<Message>(envelope.Payload);
+            if (msg is KeyExchangeMessage { IsResponse: true } response)
+                return (response, envelope.SenderPublicKey);
         }
     }
     private async Task HandleTransferAsync(string transferId, bool accept)
@@ -392,6 +671,7 @@ public sealed class P2PChatTui(
         AddSystemMessage("  /group create <名称> | /group send <群ID前缀> <消息> | /group list 列出已知群组");
         AddSystemMessage("  /file send <联系人> <文件路径> | /accept <传输ID> 接受 | /reject <传输ID> 拒绝");
         AddSystemMessage("  /add <节点ID(hex,40位)> [ip:port] [别名]   添加联系人（给出 ip:port 可免 DHT 直连）");
+        AddSystemMessage("  /connect <ip:port>   直连对端（不需知道对方节点ID，hello 握手后自动登记）");
         AddSystemMessage("  /help 帮助 | /quit 退出");
         AddSystemMessage("快捷键: F1=帮助 F2=添加联系人 F3=新建群组 F10=退出 Tab=切换联系人 PgUp/PgDn=滚动聊天");
         AddSystemMessage("P2PChat v1.1 - 基于Kademlia DHT的P2P聊天软件 (.NET 11 / 自绘控制台UI / AES-256-GCM)");

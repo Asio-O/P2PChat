@@ -246,7 +246,8 @@ public class KademliaDhtService : IDhtService, IDisposable
                 {
                     NodeId = NodeId.CreateRandom(), // 暂时随机
                     EndPoint = ep,
-                    PublicKey = Array.Empty<byte>()
+                    // 引导节点是外部数据，长期公钥未知 → 显式 null
+                    PublicKey = null
                 });
             }
         }
@@ -362,7 +363,7 @@ public class KademliaDhtService : IDhtService, IDisposable
             {
                 NodeId = remoteNodeId,
                 EndPoint = remoteEp,
-                PublicKey = Array.Empty<byte>(), // DHT层不关心公钥
+                PublicKey = null,   // DHT 层不关心公钥：KRPC 应答里拿不到，显式 null 表示未知
                 LastSeen = DateTime.UtcNow
             };
             _routingTable.AddOrUpdate(remoteNode);
@@ -544,7 +545,9 @@ public record NodeInfoDto
     [Key(1)] public required string IpAddress { get; init; }
     [Key(2)] public int Port { get; init; }
     /// <remarks>set 而非 init：init 属性 + 初始化器会在反序列化时被重置为 default(MsgPack017)。</remarks>
-    [Key(3)] public byte[] PublicKey { get; set; } = Array.Empty<byte>();
+    // 可空：NodeInfo.PublicKey 现在用 null 显式表示「未知」。DHT 应答里本来就拿不到长期公钥，
+    // 用 byte[] 强制非空会逼调用点编造一个空数组（那会让 NodeId.FromPublicKey 算出错误结果）。
+    [Key(3)] public byte[]? PublicKey { get; set; }
 }
 
 /// <summary>

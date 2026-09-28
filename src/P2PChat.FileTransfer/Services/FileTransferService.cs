@@ -43,9 +43,22 @@ public class FileTransferService : IFileTransferService
 
     /// <inheritdoc />
     public async Task<string> SendOfferAsync(NodeId recipientId, string filePath, CancellationToken ct = default)
+        => await SendOfferAsync(recipientId, filePath, DefaultChunkSize, ct);
+
+    /// <summary>
+    /// 发送文件传输 Offer，并允许指定分块大小。
+    /// <para>
+    /// 分块大小由发送方决定，并在 <see cref="FileMetaMessage.ChunkSize"/> 与本地
+    /// <see cref="TransferState.ChunkSize"/> 中同源写入；后续发送循环按该值切片。
+    /// </para>
+    /// </summary>
+    public async Task<string> SendOfferAsync(
+        NodeId recipientId, string filePath, int chunkSize, CancellationToken ct = default)
     {
         if (!System.IO.File.Exists(filePath))
             throw new FileNotFoundException("文件不存在", filePath);
+        if (chunkSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(chunkSize), "分块大小必须为正数");
 
         var recipient = await _dht.FindNodeAsync(recipientId, ct)
             ?? throw new InvalidOperationException("目标节点未找到");
@@ -54,7 +67,7 @@ public class FileTransferService : IFileTransferService
         var fileHash = await SHA256.HashDataAsync(
             System.IO.File.OpenRead(filePath), ct);
 
-        var totalChunks = (int)Math.Ceiling((double)fileInfo.Length / DefaultChunkSize);
+        var totalChunks = (int)Math.Ceiling((double)fileInfo.Length / chunkSize);
         var transferId = Guid.NewGuid().ToString("N");
 
         var meta = new FileMetaMessage
@@ -65,24 +78,28 @@ public class FileTransferService : IFileTransferService
             FileName = fileInfo.Name,
             FileSize = fileInfo.Length,
             FileHash = fileHash,
-            ChunkSize = DefaultChunkSize,
+            ChunkSize = chunkSize,
             TotalChunks = totalChunks
         };
 
         // 存储传输状态
+        // state.ChunkSize 与 meta.ChunkSize 同源（同一表达式），发送循环按 state.ChunkSize 切片；
+        // 此前 SendFileChunksAsync 硬编码 DefaultChunkSize 而忽略 state.ChunkSize，
+        // 导致任何非默认分块大小实际上仍按 65536 发送 —— 见 2026-09-21-filetransfer-chunksize。
         _activeTransfers[transferId] = new TransferState
         {
             TransferId = transferId,
             FilePath = filePath,
             FileSize = fileInfo.Length,
+            ChunkSize = chunkSize,
             TotalChunks = totalChunks,
             IsSender = true,
             RemoteNodeId = recipientId
         };
 
         await _router.SendAsync(recipient, meta, ct);
-        _logger.LogInformation("文件Offer已发送: {File} ({Size}字节) -> {Recipient}",
-            fileInfo.Name, fileInfo.Length, recipientId.ToHexString()[..8]);
+        _logger.LogInformation("文件Offer已发送: {File} ({Size}字节, ChunkSize={ChunkSize}) -> {Recipient}",
+            fileInfo.Name, fileInfo.Length, chunkSize, recipientId.ToHexString()[..8]);
 
         return transferId;
     }
@@ -240,7 +257,9 @@ public class FileTransferService : IFileTransferService
         var recipient = await _dht.FindNodeAsync(recipientId, ct);
         if (recipient == null) return;
 
-        var buffer = new byte[DefaultChunkSize];
+        // 严格按 state.ChunkSize 分配读缓冲与切片；之前硬编码 DefaultChunkSize 意味着
+        // 任何非默认分块大小都不会真正生效 —— 见 2026-09-21-filetransfer-chunksize。
+        var buffer = new byte[state.ChunkSize];
         await using var fs = System.IO.File.OpenRead(state.FilePath!);
         int bytesRead;
         int chunkIndex = 0;

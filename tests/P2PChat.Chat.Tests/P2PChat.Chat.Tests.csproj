@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="Moq" />
     <PackageReference Include="Shouldly" />
@@ -22,6 +23,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\P2PChat.Chat\P2PChat.Chat.csproj" />
+    <!-- 直接被断言的模型与契约来源：NodeId/MessageEnvelope/TextMessage/IGroupMetadataStore 等 -->
+    <ProjectReference Include="..\..\src\P2PChat.Core\P2PChat.Core.csproj" />
+    <!-- 真实 AesGcmEncryptionService：会话密钥/群密钥的加解密契约需要真密码学而非 Mock -->
+    <ProjectReference Include="..\..\src\P2PChat.Crypto\P2PChat.Crypto.csproj" />
   </ItemGroup>
 
 </Project>

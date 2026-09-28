@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-The program had no way for two nodes to connect **without relying on DHT discovery**. The only path was `ChatService` → `IDhtService.FindNodeAsync(peer NodeId)`, and that path necessarily fails in the current implementation (see [Public DHT cannot discover peer nodes](../../proposed/bug-fix/2026-09-20-public-dht-peer-discovery-gap.md)):
+The program had no way for two nodes to connect **without relying on DHT discovery**. The only path was `ChatService` → `IDhtService.FindNodeAsync(peer NodeId)`, and that path necessarily fails in the current implementation (see [Public DHT cannot discover peer nodes](../bug-fix/2026-09-20-public-dht-peer-discovery-gap.md)):
 
 - nothing anywhere announces a `NodeId → endpoint` mapping for a node;
 - `FindNodeAsync` demands an exact NodeId match, while the public DHT returns BitTorrent nodes near that ID;
@@ -31,18 +31,18 @@ The priority lives at the `IDhtService.FindNodeAsync` layer because that is the 
 
 **Write static endpoints into the routing table only, without a separate registry.** Rejected: a full `KBucket` evicts its oldest entry, so a statically registered peer could silently disappear at runtime. A separate dictionary is immune, and the routing table stays as a supplementary source for `find_node` replies.
 
-**Stand up a rendezvous node holding `NodeId → endpoint`.** Rejected: it invites the central server back in, in direct conflict with the project's "decentralized, no central server" premise; the same reasoning that rejected this option in [Public DHT cannot discover peer nodes](../../proposed/bug-fix/2026-09-20-public-dht-peer-discovery-gap.md).
+**Stand up a rendezvous node holding `NodeId → endpoint`.** Rejected: it invites the central server back in, in direct conflict with the project's "decentralized, no central server" premise; the same reasoning that rejected this option in [Public DHT cannot discover peer nodes](../bug-fix/2026-09-20-public-dht-peer-discovery-gap.md).
 
 ## Consequences
 
 - Two nodes can connect directly as long as they know each other's node ID and TCP listen port — **no discovery mechanism required**.
 - The endpoint is persisted and re-registered automatically at startup, so one `/add` lasts.
 - A static peer also enters the routing table, so `find_node` replies advertise it to other nodes, a mild positive for overall discoverability.
-- **Cost: information must be exchanged out of band.** The user has to obtain both facts (node ID and `ip:port`) through some other channel. This does not answer "how do I reach someone when I only have their node ID" — that is owned by [Public DHT cannot discover peer nodes](../../proposed/bug-fix/2026-09-20-public-dht-peer-discovery-gap.md).
+- **Cost: information must be exchanged out of band.** The user has to obtain both facts (node ID and `ip:port`) through some other channel. This does not answer "how do I reach someone when I only have their node ID" — that is owned by [Public DHT cannot discover peer nodes](../bug-fix/2026-09-20-public-dht-peer-discovery-gap.md).
 - **Cost: a hand-specified endpoint never updates itself.** If the peer changes address or port, the user must run `/add` again.
 - **Known gap: group invites to manually added contacts still fail.** A static peer's `PublicKey` is empty, while `GroupChatService.EncryptGroupKeyForMember` needs the long-term public key to wrap the group key; that failure is **silently swallowed** by `CreateGroupAsync`'s `catch {}`. The fix is to return the long-term public key in `KeyExchangeMessage` (a wire change), which is out of scope here.
 - Guard tests: `IdentityAndEndpointTests.静态对端_登记后无需DHT发现即可被FindNodeAsync命中`, `IdentityAndEndpointTests.静态对端_仅凭显式端点即可完成双向加密私聊` (which never calls the harness's `Discover`), and the 19 parsing cases in `EndpointTextTests`.
 
 ## Deferred
 
-`/connect <ip:port>` — connecting without knowing the peer's node ID in advance. It needs an extra "hello" exchange to learn the peer's identity (for example via the `SenderId` of `KeyExchange`), so it is not part of this change. Explicit endpoints already cover today's two-machine debugging need.
+`/connect <ip:port>` — connecting without knowing the peer's node ID in advance. It needs an extra "hello" exchange to learn the peer's identity (for example via the `SenderId` of `KeyExchange`); shipped separately as [Direct connect via an endpoint without a known peer NodeId](./2026-09-21-blind-connect.md).

@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-程序没有任何机制能让两个节点在**不依赖 DHT 发现**的前提下建立连接。唯一的路径是 `ChatService` → `IDhtService.FindNodeAsync(对端 NodeId)`，而这条路径在当前实现下必然失败（详见 [公共 DHT 无法发现对端节点](../../proposed/bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md)）：
+程序没有任何机制能让两个节点在**不依赖 DHT 发现**的前提下建立连接。唯一的路径是 `ChatService` → `IDhtService.FindNodeAsync(对端 NodeId)`，而这条路径在当前实现下必然失败（详见 [公共 DHT 无法发现对端节点](../bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md)）：
 
 - 没有任何地方为节点宣告 `NodeId → 端点` 映射；
 - `FindNodeAsync` 要求 NodeId **精确相等**，而公网 DHT 返回的是靠近该 ID 的 BitTorrent 节点；
@@ -34,7 +34,7 @@ Status: implemented
 
 **只把静态端点写进路由表，不加独立登记表。** 否决：`KBucket` 满时会淘汰最旧条目，静态登记的对端可能在运行中悄悄消失。独立字典不受淘汰影响，路由表只作为 `find_node` 应答的补充来源。
 
-**自建 rendezvous 节点存放 `NodeId → 端点`。** 否决：等于把中心服务器请回来，与项目「去中心化、无中心服务器」的前提直接冲突；理由与 [公共 DHT 无法发现对端节点](../../proposed/bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md) 中同一替代方案的否决一致。
+**自建 rendezvous 节点存放 `NodeId → 端点`。** 否决：等于把中心服务器请回来，与项目「去中心化、无中心服务器」的前提直接冲突；理由与 [公共 DHT 无法发现对端节点](../bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md) 中同一替代方案的否决一致。
 
 ## Consequences
 
@@ -42,7 +42,7 @@ Status: implemented
 - 端点持久化并随启动自动登记，`/add` 一次即可长期使用。
 - 静态对端同时入路由表，`find_node` 应答会把它们报给其他节点，对整体可发现性有轻微正向作用。
 - **代价：需要带外交换信息。** 用户必须先通过其他渠道获得对端的节点 ID 与 `ip:port` 两项信息，
-  这没有解决「只知道节点 ID 时如何连上」的问题 —— 那由 [公共 DHT 无法发现对端节点](../../proposed/bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md) 承接。
+  这没有解决「只知道节点 ID 时如何连上」的问题 —— 那由 [公共 DHT 无法发现对端节点](../bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md) 承接。
 - **代价：手工指定的端点不会自动更新。** 对端更换地址或端口后必须重新 `/add`。
 - **已知缺口：群邀请对手工添加的联系人仍会失败。** 静态对端的 `PublicKey` 为空，而 `GroupChatService.EncryptGroupKeyForMember` 包装群密钥需要长期公钥；该失败会被 `CreateGroupAsync` 的 `catch {}` **静默吞掉**。修法是在 `KeyExchangeMessage` 中回送长期公钥（线路变更），不在本变更范围内。
 - 守卫测试：`IdentityAndEndpointTests.静态对端_登记后无需DHT发现即可被FindNodeAsync命中`、
@@ -51,4 +51,4 @@ Status: implemented
 
 ## Deferred
 
-`/connect <ip:port>` —— 不预先知道对端节点 ID 的直连。它需要一次额外的「hello」交换来学习对端身份（例如借助 `KeyExchange` 的 `SenderId`），因此不属于本变更。显式端点已覆盖当前的双机联调需求。
+`/connect <ip:port>` —— 不预先知道对端节点 ID 的直连。它需要一次额外的「hello」交换来学习对端身份（例如借助 `KeyExchange` 的 `SenderId`）；已作为独立变更交付，见 [直连（不需预知对端节点 ID）](./2026-09-21-blind-connect.zh.md)。

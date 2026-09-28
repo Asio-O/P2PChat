@@ -203,6 +203,7 @@ public class StoredKeyPair
 [JsonSerializable(typeof(List<StoredContact>))]
 [JsonSerializable(typeof(StoredContact))]
 [JsonSerializable(typeof(StoredGroup))]
+[JsonSerializable(typeof(List<StoredGroup>))]
 public partial class JsonContext : JsonSerializerContext
 {
 }

@@ -80,4 +80,56 @@ public class BencodeTests
         nodes[1].Ip.ToString().ShouldBe("5.6.7.8");
         nodes[1].Port.ShouldBe(9002);
     }
+
+    [Fact]
+    public void ParseCompactPeers26_RoundTrip()
+    {
+        // 构造两条目：NodeId 全 0x10 字节 + IP=10.0.0.1 / Port=6881 与 IP=10.0.0.2 / Port=6882。
+        // 用 NodeId.FromPublicKey 输入合法 P-256 公钥更稳妥——但本测试只关心 26 字节布局，
+        // 直接按 26 字节组填充字节数组即可。
+        var data = new byte[26 * 2];
+        // NodeId 1 = 全 0x10
+        for (int i = 0; i < 20; i++) data[i] = 0x10;
+        data[20] = 10; data[21] = 0; data[22] = 0; data[23] = 1;
+        data[24] = 0x1A; data[25] = 0xE1; // 6881
+        // NodeId 2 = 全 0x20
+        for (int i = 26; i < 46; i++) data[i] = 0x20;
+        data[46] = 10; data[47] = 0; data[48] = 0; data[49] = 2;
+        data[50] = 0x1A; data[51] = 0xE2; // 6882
+
+        var peers = Bencode.ParseCompactPeers26(data);
+
+        peers.Count.ShouldBe(2);
+        peers[0].Ip.ToString().ShouldBe("10.0.0.1");
+        peers[0].Port.ShouldBe(6881);
+        peers[1].Ip.ToString().ShouldBe("10.0.0.2");
+        peers[1].Port.ShouldBe(6882);
+        // NodeId 必须从字节数组原样取出
+        peers[0].NodeId.Length.ShouldBe(20);
+        peers[0].NodeId[0].ShouldBe((byte)0x10);
+        peers[1].NodeId[19].ShouldBe((byte)0x20);
+    }
+
+    [Fact]
+    public void ParseCompactPeers26_尾部不足26字节被截断丢弃()
+    {
+        // 28 字节：1 个完整条目 + 2 字节尾巴
+        var data = new byte[28];
+        for (int i = 0; i < 20; i++) data[i] = 0x33;
+        data[20] = 192; data[21] = 168; data[22] = 1; data[23] = 1;
+        data[24] = 0x1A; data[25] = 0xE2;
+        data[26] = 0xFF; data[27] = 0xFF; // 不完整尾部
+
+        var peers = Bencode.ParseCompactPeers26(data);
+
+        peers.Count.ShouldBe(1, "不足 26 字节的尾部必须被丢弃，不能误解析为第 2 条目");
+        peers[0].Port.ShouldBe(6882);
+    }
+
+    [Fact]
+    public void ParseCompactPeers26_空输入返回空列表()
+    {
+        Bencode.ParseCompactPeers26([]).ShouldBeEmpty();
+        Bencode.ParseCompactPeers26(new byte[10]).ShouldBeEmpty();
+    }
 }

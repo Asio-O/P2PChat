@@ -67,7 +67,10 @@ public sealed class NodeHarness : IAsyncDisposable
         tcp.StartListeningAsync(0).GetAwaiter().GetResult();
 
         var serializer = new MessagePackSerializer();
-        var router = new MessageRouter(tcp, serializer, NullLogger<MessageRouter>.Instance);
+        // 注入 IEncryptionService + IKeyStore —— MessageRouter 现在用长期 ECDSA 私钥签出站消息，
+        // 并在 RouteIncomingAsync 入口验签。见 2026-09-21-message-signing。
+        var router = new MessageRouter(
+            tcp, serializer, encryption, keyStore, NullLogger<MessageRouter>.Instance);
         var capturingRouter = new PayloadCapturingMessageRouter(router, serializer);
         var localNode = new NodeInfo
         {
@@ -96,7 +99,7 @@ public sealed class NodeHarness : IAsyncDisposable
             Router = router,
             CapturingRouter = capturingRouter,
             Chat = new ChatService(dht, capturingRouter, encryption, keyStore, NullLogger<ChatService>.Instance),
-            Group = new GroupChatService(dht, router, encryption, keyStore),
+            Group = new GroupChatService(dht, router, encryption, keyStore, new InMemoryGroupMetadataStore()),
             Files = new FileTransferService(dht, router, encryption, NullLogger<FileTransferService>.Instance),
             KeyStore = keyStore,
             Dht = dht,

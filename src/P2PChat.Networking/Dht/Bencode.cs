@@ -173,4 +173,32 @@ public static class Bencode
         result[25] = (byte)port;
         return result;
     }
+
+    /// <summary>
+    /// 将 P2PChat 扩展紧凑对端格式（26 字节/条目）解析为列表。
+    /// 格式：<c>[20B NodeId][4B IPv4][2B Port BE]</c>，与 <see cref="ParseCompactNodes"/> 相同的 26 字节布局，
+    /// 但语义是 <c>get_peers</c> 应答中的 <c>p2pc_peers</c> 字段（携带宣告方的 NodeId + 宣告时使用的 TCP 端点）。
+    /// </summary>
+    /// <remarks>
+    /// 为何不用 BitTorrent 标准的 6 字节 <c>values</c>：标准格式只携带 IP+port，
+    /// 接收方拿不到宣告方的 NodeId，无法与「我正在找的 NodeId」匹配。
+    /// P2PChat 节点之间使用本格式；公网节点不返回 <c>p2pc_peers</c>，视为未发现。
+    /// </remarks>
+    public static List<(byte[] NodeId, System.Net.IPAddress Ip, int Port)> ParseCompactPeers26(byte[] peersData)
+    {
+        var result = new List<(byte[], System.Net.IPAddress, int)>();
+        if (peersData is null) return result;
+        const int entrySize = 26;
+        for (int i = 0; i + entrySize <= peersData.Length; i += entrySize)
+        {
+            var nodeId = new byte[20];
+            Buffer.BlockCopy(peersData, i, nodeId, 0, 20);
+            var ipBytes = new byte[4];
+            Buffer.BlockCopy(peersData, i + 20, ipBytes, 0, 4);
+            var ip = new System.Net.IPAddress(ipBytes);
+            var port = (peersData[i + 24] << 8) | peersData[i + 25];
+            result.Add((nodeId, ip, port));
+        }
+        return result;
+    }
 }

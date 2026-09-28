@@ -1,0 +1,33 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/implemented/bug-fix/2026-09-21-nat-traversal.md
+  zh: notes/implemented/bug-fix/2026-09-21-nat-traversal.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: NAT traversal (UPnP / external endpoint)"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Protocol & interfaces
+      - Alternatives considered
+      - Consequences
+      - Verification
+      - Deferred
+    tokens: []
+  zh:
+    heading: "# Agent Note: NAT 穿透（UPnP / 外部端点）"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+      - Verification
+      - Deferred
+    tokens: []
+
+recorded: 2026-09-21
