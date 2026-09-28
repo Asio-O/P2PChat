@@ -146,6 +146,10 @@ public class ChatService : IChatService, IChatEventPublisher
             SenderId = identity.NodeId.ToByteArray(),
             ConversationId = recipient.NodeId.ToHexString(),
             EphemeralPublicKey = ephemeralKey.PublicKey,
+            // 自报本机**监听**端点，让对端能把我们登记为静态对端（/connect 双向的一半）。
+            // LocalNode.EndPoint 即本机监听端点（局域网 IP + TCP 监听端口），与 DHT 宣告同源。
+            // 注意它对**跨 NAT** 对端不可达 —— 那种场景靠 DHT 解析拿到公网端点，不靠反向登记。
+            SenderListenEndPoint = Core.Extensions.EndpointText.Format(_dht.LocalNode.EndPoint),
             IsResponse = false
         };
 

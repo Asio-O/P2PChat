@@ -438,6 +438,8 @@ public class GroupChatService : IGroupChatService
                 SenderId = identity.NodeId.ToByteArray(),
                 ConversationId = memberNodeId.ToHexString(),
                 EphemeralPublicKey = ephemeral.PublicKey,
+                // 自报本机监听端点，让成员也能把我们登记为静态对端（见 KeyExchangeMessage.SenderListenEndPoint）。
+                SenderListenEndPoint = EndpointText.Format(_dht.LocalNode.EndPoint),
                 IsResponse = false
             };
 

@@ -151,7 +151,11 @@ public sealed class NodeHarness : IAsyncDisposable
             encryption, keyStore, chat, NullLogger<PrivateMessageHandler>.Instance);
         var groupHandler = new GroupMessageHandler(
             encryption, keyStore, chat, NullLogger<GroupMessageHandler>.Instance);
-        var keyExchange = new KeyExchangeHandler(encryption, keyStore, NullLogger<KeyExchangeHandler>.Instance);
+        // dht = 本 fixture 的 FakeDhtService（上方 L141 已建）。KeyExchangeHandler 需要它来把
+        // 「主动 /connect 而来的对端」用**已验签的** envelope.SenderId + RemoteEndPoint 反向登记
+        // 为静态对端（/connect 变双向，见 task-23）。
+        var keyExchange = new KeyExchangeHandler(
+            encryption, keyStore, NullLogger<KeyExchangeHandler>.Instance, dht);
         var inviteHandler = new GroupInviteHandler(encryption, keyStore, NullLogger<GroupInviteHandler>.Instance);
         var notifyHandler = new GroupNotifyHandler(NullLogger<GroupNotifyHandler>.Instance);
 

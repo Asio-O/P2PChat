@@ -49,6 +49,12 @@ public static class ChatServiceCollectionExtensions
         services.AddSingleton<IGroupMetadataStore, FileBackedGroupMetadataStore>();
 
         // 消息处理器
+        // KeyExchangeHandler 需要 IDhtService：收到密钥交换请求时，把「主动连进来的对端」
+        // 以**已验签的**身份 + TCP 连接源端点反向登记为静态对端 —— 这让 `/connect <ip:port>`
+        // 成为双向（见该类 RegisterInboundPeer 的注释）。
+        // ⚠️ 前提：宿主必须注册 IDhtService。本扩展方法**不**注册它（DHT 实现属于 Networking 层），
+        //    漏注册会在解析 KeyExchangeHandler 时**抛异常**，而不是静默降级 —— 这正是把它做成
+        //    必填构造参数的目的。
         services.AddSingleton<PrivateMessageHandler>();
         services.AddSingleton<GroupMessageHandler>();
         services.AddSingleton<KeyExchangeHandler>();

@@ -369,6 +369,55 @@ public class MessageRouterTests
     }
 
     [Fact]
+    public async Task 载荷SenderId与信封SenderId不一致时必须丢弃_不得进handler()
+    {
+        // `Message.SenderId` 存在但**不是权威**；权威是 envelope.SenderId。
+        // 只要允许两者不一致，下一个读 message.SenderId 的人就会踩 KeyExchangeHandler
+        // 踩过的那个坑（会话密钥写进伪造的槽位，静默失败）。
+        var h = Build();
+        var peer = NewPeerIdentity(h);
+        var handler = new RecordingHandler();
+        h.Router.RegisterHandler(handler);
+
+        var victim = NewPeerIdentity(h);
+        var envelope = Sign(h, peer, MessageType.PrivateText, new TextMessage
+        {
+            SenderId = victim.NodeId.ToByteArray(),   // 载荷自称是别人
+            ConversationId = "c",
+            Content = "x",
+            IsGroup = false
+        });
+
+        // 信封本身是合法签名（对端用自己的私钥签的）—— 所以这条不能退化成
+        // 「非法包被拒」的重复测试：唯一的拒绝理由就是载荷/信封不一致。
+        MessageRouter.VerifyEnvelope(envelope, h.Crypto, out var reason).ShouldBeTrue(reason);
+
+        await h.Router.RouteIncomingAsync(envelope, new FakeTcpConnection());
+
+        handler.Calls.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task 载荷SenderId与信封SenderId一致时正常派发()
+    {
+        // 与上一条构成对照：检查本身不能误杀合法消息。
+        var h = Build();
+        var peer = NewPeerIdentity(h);
+        var handler = new RecordingHandler();
+        h.Router.RegisterHandler(handler);
+
+        await h.Router.RouteIncomingAsync(Sign(h, peer, MessageType.PrivateText, new TextMessage
+        {
+            SenderId = peer.NodeId.ToByteArray(),
+            ConversationId = "c",
+            Content = "x",
+            IsGroup = false
+        }), new FakeTcpConnection());
+
+        handler.Calls.ShouldBe(1);
+    }
+
+    [Fact]
     public async Task 连接池_同一节点的多次获取复用同一条连接_不重复建连()
     {
         var h = Build();

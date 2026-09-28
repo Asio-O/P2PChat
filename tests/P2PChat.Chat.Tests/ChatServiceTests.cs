@@ -221,7 +221,7 @@ public class ChatServiceTests
         // 用真实 MessageRouter：它负责签名信封，ChatService 负责发起交换，
         // 真实 KeyExchangeHandler 在同一条连接上回响应 —— 完整走一遍线上握手。
         var router = TestRouters.Create(transport, Wire, crypto, localKs);
-        var peerHandler = new KeyExchangeHandler(crypto, peerKs, NullLogger<KeyExchangeHandler>.Instance);
+        var peerHandler = new KeyExchangeHandler(crypto, peerKs, NullLogger<KeyExchangeHandler>.Instance, new RecordingStaticPeerDht());
 
         var link = new FakeTcpConnection(peer.EndPoint);
         link.OnSend = async frame =>

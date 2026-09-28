@@ -137,6 +137,46 @@ public sealed class RecordingGroupMetadataStore : IGroupMetadataStore
 /// 原样交给 Chat 层，用来断言 Chat 层不会私自改写端点。
 /// </para>
 /// </summary>
+/// <summary>
+/// 极简 <see cref="IDhtService"/> 替身：只记录 <see cref="RegisterStaticPeer"/> 的调用。
+/// <para>
+/// 用于断言「对端 /connect 而来时，本节点会把它反向登记为静态对端」这一行为
+/// （task-23：让 <c>/connect</c> 变双向）。刻意做成无参 —— 它不参与任何查找逻辑。
+/// </para>
+/// </summary>
+public sealed class RecordingStaticPeerDht : IDhtService
+{
+    public List<NodeInfo> RegisteredStaticPeers { get; } = [];
+
+    /// <summary>本替身不关心本机身份；KeyExchangeHandler 不会读它。</summary>
+    public NodeInfo LocalNode { get; } = new()
+    {
+        NodeId = NodeId.CreateRandom(),
+        EndPoint = new IPEndPoint(IPAddress.Loopback, 0),
+        PublicKey = null
+    };
+
+    public void RegisterStaticPeer(NodeInfo node) => RegisteredStaticPeers.Add(node);
+
+    /// <summary>查已登记的条目；没有则返回 null。</summary>
+    public NodeInfo? FindRegistered(NodeId nodeId) =>
+        RegisteredStaticPeers.LastOrDefault(n => n.NodeId.Equals(nodeId));
+
+    public Task BootstrapAsync(CancellationToken ct = default) => Task.CompletedTask;
+    public Task<NodeInfo?> FindNodeAsync(NodeId targetId, CancellationToken ct = default) => Task.FromResult<NodeInfo?>(null);
+    public Task StoreAsync(byte[] key, byte[] value, CancellationToken ct = default) => Task.CompletedTask;
+    public Task<byte[]?> FindValueAsync(byte[] key, CancellationToken ct = default) => Task.FromResult<byte[]?>(null);
+    public Task<bool> PingAsync(NodeInfo node, CancellationToken ct = default) => Task.FromResult(true);
+    public IReadOnlyList<NodeInfo> GetAllKnownNodes() => RegisteredStaticPeers;
+    public IAsyncEnumerable<PeerDiscoveryEventArgs> OnPeerDiscovered => Empty();
+
+    private static async IAsyncEnumerable<PeerDiscoveryEventArgs> Empty()
+    {
+        await Task.CompletedTask;
+        yield break;
+    }
+}
+
 public sealed class StubDhtService : IDhtService
 {
     private readonly Dictionary<string, NodeInfo> _nodes = new(StringComparer.Ordinal);

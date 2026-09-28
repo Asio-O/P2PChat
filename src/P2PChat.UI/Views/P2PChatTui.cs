@@ -338,7 +338,7 @@ public sealed class P2PChatTui(
                     : cmd == "file" ? "用法: /file send <联系人> <文件路径>"
                     : cmd == "add" ? "用法: /add <节点ID(hex,40位)> [ip:port] [别名]"
                     : cmd is "accept" or "reject" ? $"用法: /{cmd} <传输ID>"
-                    : cmd == "connect" ? "用法: /connect <ip:port>（不需知道对端节点ID）"
+                    : cmd == "connect" ? "用法: /connect <ip:port> [--force]（不需知道对端节点ID）"
                     : "用法: /group create <名称> 或 /group send <ID> <消息>");
                 return;
             }
@@ -601,6 +601,11 @@ public sealed class P2PChatTui(
                 SenderId = identity.NodeId.ToByteArray(),
                 ConversationId = $"connect-{tempId.ToHexString()[..8]}",
                 EphemeralPublicKey = ephemeral.PublicKey,
+                // 自报本机**监听**端点 —— 这是让 /connect 变双向的关键：
+                // 对端从入站连接只能拿到本机的**临时出站端口**（TCP 握手不携带对端监听端口），
+                // 回连必然失败；只有本机自己说才能给出可回连的端点。
+                // LocalNode.EndPoint 即本机监听端点（局域网 IP + TCP 监听端口），与 DHT 宣告同源。
+                SenderListenEndPoint = Core.Extensions.EndpointText.Format(dhtService.LocalNode.EndPoint),
                 IsResponse = false
             };
             await router.SendViaConnectionAsync(connection, hello, helloCts.Token);
@@ -907,7 +912,7 @@ public sealed class P2PChatTui(
         AddSystemMessage("  /group create <名称> | /group send <群ID前缀> <消息> | /group list 列出已知群组");
         AddSystemMessage("  /file send <联系人> <文件路径> | /accept <传输ID> 接受 | /reject <传输ID> 拒绝");
         AddSystemMessage("  /add <节点ID(hex,40位)> [ip:port] [别名]   添加联系人（给出 ip:port 可免 DHT 直连）");
-        AddSystemMessage("  /connect <ip:port>   直连对端（不需知道对方节点ID，hello 握手后自动登记）");
+        AddSystemMessage("  /connect <ip:port> [--force]   直连对端（不需知道对方节点ID，hello 握手后自动登记；同一端点前后身份不一致时用 --force 放行本次）");
         AddSystemMessage("  /help 帮助 | /quit 退出");
         AddSystemMessage("快捷键: F1=帮助 F2=添加联系人 F3=新建群组 F10=退出 Tab=切换联系人 PgUp/PgDn=滚动聊天");
         AddSystemMessage("P2PChat v1.1 - 基于Kademlia DHT的P2P聊天软件 (.NET 11 / 自绘控制台UI / AES-256-GCM)");

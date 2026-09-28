@@ -107,10 +107,42 @@ public class MessageRouter : IMessageRouter
             return;
         }
 
+        Message message;
         try
         {
-            var message = _serializer.Deserialize<Message>(envelope.Payload);
+            message = _serializer.Deserialize<Message>(envelope.Payload);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "消息载荷反序列化失败，已丢弃: Type={Type}", envelope.MessageType);
+            return;
+        }
 
+        // 载荷 SenderId 与信封 SenderId 必须一致（反序列化之后、handler 派发之前）。
+        //
+        // 为什么要有这道检查：`Message.SenderId` 这个字段**存在但不是权威** ——
+        // 权威是 `envelope.SenderId`（已被 ECDSA 签名覆盖，且被验签强制与公钥派生一致）。
+        // 历史缺陷正是因此产生的：KeyExchangeHandler 曾用载荷的 SenderId 去写会话密钥槽位，
+        // 而同一方法里另几行又正确地用了信封 —— 同一个方法、相距 6 行，一个信载荷一个信封。
+        // 只要「两者可以不一致」这件事被允许，下一个读 message.SenderId 的人就会踩同一个坑，
+        // 而且没有任何编译期或测试期的提示。加了检查之后，该字段才成为「构造上可信」的东西。
+        //
+        // 不一致只可能来自：发送方把载荷 SenderId 填错（实现 bug），
+        // 或对端刻意构造（此时它已通过验签，说明对端在用合法私钥说一个自相矛盾的话）。
+        // 两种情况都没有任何合理用途，一律拒绝。
+        if (message is { SenderId: not null } payload && !SameSender(envelope.SenderId, payload.SenderId))
+        {
+            _logger.LogWarning(
+                "载荷 SenderId 与信封 SenderId 不一致，已丢弃（载荷身份字段不是权威）: " +
+                "Type={Type}, Payload={PayloadSender}, Envelope={EnvelopeSender}",
+                envelope.MessageType,
+                DescribeNodeId(payload.SenderId),
+                DescribeNodeId(envelope.SenderId));
+            return;
+        }
+
+        try
+        {
             // 通过非泛型 IMessageHandler 接口分发 (默认接口方法转发到强类型重载)。
             // 不再使用 reflection GetMethod/Invoke: Native-AOT 下反射目标缺少静态调用点
             // 会被 ILC 裁剪，导致处理器静默失效 (原先会产生 IL2075)。
@@ -205,8 +237,25 @@ public class MessageRouter : IMessageRouter
 
     #region 辅助方法
 
-    private static MessageType GetMessageType(Message message) => message switch
+    /// <summary>两个节点 ID 字节数组是否表示同一身份（长度不等直接判否，避免 <c>AsSpan().SequenceEqual</c> 抛异常）。</summary>
+    private static bool SameSender(byte[]? envelopeSenderId, byte[] payloadSenderId)
     {
+        if (envelopeSenderId is null || envelopeSenderId.Length != payloadSenderId.Length)
+            return false;
+
+        return envelopeSenderId.AsSpan().SequenceEqual(payloadSenderId);
+    }
+
+    /// <summary>日志用的短身份标签；长度非法时如实标注，不抛异常（日志路径不应成为故障源）。</summary>
+    private static string DescribeNodeId(byte[]? nodeId)
+    {
+        if (nodeId is null) return "<null>";
+        return nodeId.Length == NodeId.Size
+            ? Convert.ToHexString(nodeId).ToLowerInvariant()[..8]
+            : $"<malformed:{nodeId.Length}B>";
+    }
+
+    private static MessageType GetMessageType(Message message) => message switch    {
         TextMessage m => m.IsGroup ? MessageType.GroupText : MessageType.PrivateText,
         FileMetaMessage => MessageType.FileMeta,
         FileChunkMessage => MessageType.FileChunk,

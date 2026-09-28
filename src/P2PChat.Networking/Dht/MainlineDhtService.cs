@@ -171,7 +171,23 @@ public class MainlineDhtService : IDhtService, IDisposable
         }
 
         if (!anySuccess)
+        {
             _logger.LogWarning("所有引导节点均无响应，路由表为空");
+
+            // 面向用户的操作指引（不是给排障者看的日志）。
+            // 场景三「局域网内一台能连公网、一台完全不能」的用户，收到的正是上面这句，
+            // 而「路由表为空」对他毫无帮助 —— 他需要知道下一步敲什么。
+            // 本块整体在 if (!anySuccess) 内，因此**只在引导确实失败时出现**，不会每次启动刷屏。
+            _logger.LogWarning(
+                "无法加入公共 DHT：如果你和对端在同一个局域网，或本机访问不了公网 DHT，"
+                + "请不要依赖自动发现，改用下面两条命令之一（两者都完全绕开 DHT）：");
+            _logger.LogWarning(
+                "  /add <对方节点ID> <局域网IP>:<对方TCP端口>      已知对方节点 ID 时");
+            _logger.LogWarning(
+                "  /connect <局域网IP>:<对方TCP端口>               不知道节点 ID 时（hello 握手自动获取）");
+            _logger.LogWarning(
+                "对方在对方程序里敲 /id 可同时看到它的节点 ID 与 TCP 端点（局域网地址要手动替换成内网 IP）");
+        }
 
         // 到这里所有探测都已结束 —— 每个 PING 成功的引导节点都已在 ProbeBootstrapNodeAsync 内入表，
         // 因此这一行日志反映的是完整结果（e2e 断言 A17 依赖这一点）。

@@ -347,7 +347,7 @@ public class MessageHandlerTests
         var responderKs = NewKeyStore();
         var responder = responderKs.GetOrCreateIdentity();
         var handler = new KeyExchangeHandler(
-            Crypto, responderKs, NullLogger<KeyExchangeHandler>.Instance);
+            Crypto, responderKs, NullLogger<KeyExchangeHandler>.Instance, new RecordingStaticPeerDht());
 
         var initiatorEphemeral = Crypto.GenerateKeyPair();
         var initiatorId = NodeId.FromPublicKey(initiatorEphemeral.PublicKey);
@@ -377,7 +377,7 @@ public class MessageHandlerTests
     {
         var responderKs = NewKeyStore();
         var handler = new KeyExchangeHandler(
-            Crypto, responderKs, NullLogger<KeyExchangeHandler>.Instance);
+            Crypto, responderKs, NullLogger<KeyExchangeHandler>.Instance, new RecordingStaticPeerDht());
 
         var initiatorEphemeral = Crypto.GenerateKeyPair();
         var initiatorId = NodeId.FromPublicKey(initiatorEphemeral.PublicKey);
@@ -406,7 +406,8 @@ public class MessageHandlerTests
     public async Task 密钥交换响应_不回写连接_也不自行写入会话密钥()
     {
         var ks = NewKeyStore();
-        var handler = new KeyExchangeHandler(Crypto, ks, NullLogger<KeyExchangeHandler>.Instance);
+        var handler = new KeyExchangeHandler(
+            Crypto, ks, NullLogger<KeyExchangeHandler>.Instance, new RecordingStaticPeerDht());
         var peer = Crypto.GenerateKeyPair();
         var peerId = NodeId.FromPublicKey(peer.PublicKey);
         var link = new FakeTcpConnection();
@@ -422,6 +423,219 @@ public class MessageHandlerTests
         link.SentFrames.ShouldBeEmpty();
         ks.GetSessionKey(peerId).ShouldBeNull(
             "发起方持有自己的临时私钥，由发起方负责派生并写入会话密钥");
+    }
+
+    /// <summary>
+    /// 构造一条**自洽**信封：SenderId 由公钥派生、SenderPublicKey 一并带上。
+    /// 模拟 MessageRouter 已经验签通过之后交给 handler 的样子。
+    /// </summary>
+    private static MessageEnvelope SignedEnvelope(KeyPair peerIdentity, MessageType type = MessageType.KeyExchange)
+        => new()
+        {
+            MessageType = type,
+            SenderId = peerIdentity.NodeId.ToByteArray(),
+            SenderPublicKey = peerIdentity.PublicKey,
+            Signature = new byte[64],
+            Payload = []
+        };
+
+    [Fact]
+    public async Task 密钥交换请求_绝不可把TCP连接源端点当作对端监听端点登记()
+    {
+        // ⚠️ 反向守卫（task-23 血的教训）。
+        // 曾经的实现用 `senderConnection.RemoteEndPoint` 登记静态对端，看起来很自然，
+        // 但出站连接的本地端口是内核分配的 **ephemeral 临时端口**，不是监听端口 ——
+        // 登记后回连必然被拒；更糟的是 FindNodeAsync 优先查静态对端表，
+        // 一条「对端IP:临时端口」的废记录会**永久遮蔽**该对端的 DHT 解析路径。
+        // 「把对端按已验签身份与连接源端点反向登记」这条**不能**由本断言放行。
+        var ks = NewKeyStore();
+        var dht = new RecordingStaticPeerDht();
+        var handler = new KeyExchangeHandler(
+            Crypto, ks, NullLogger<KeyExchangeHandler>.Instance, dht);
+
+        var peer = Crypto.GenerateKeyPair();
+        var peerId = NodeId.FromPublicKey(peer.PublicKey);
+        var ephemeralSource = new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 52341);
+
+        await handler.HandleAsync(new KeyExchangeMessage
+        {
+            SenderId = peerId.ToByteArray(),
+            ConversationId = "kx",
+            EphemeralPublicKey = peer.PublicKey,
+            IsResponse = false
+        }, new FakeTcpConnection(ephemeralSource), SignedEnvelope(peer));
+
+        foreach (var registered in dht.RegisteredStaticPeers)
+        {
+            registered.EndPoint.ShouldNotBe(ephemeralSource,
+                "TCP 连接的源端点是对方的临时出站端口，绝不能登记为它的监听端点");
+            registered.EndPoint.Port.ShouldNotBe(ephemeralSource.Port);
+        }
+
+        ks.GetSessionKey(peerId).ShouldNotBeNull("会话密钥仍然必须建立");
+    }
+
+    [Fact]
+    public async Task 密钥交换请求_载荷SenderId被伪造时_会话密钥不得记到伪造的槽位()
+    {
+        // 历史缺陷：曾经用载荷（对端可控）的 SenderId 写会话密钥槽位。
+        // 这条锁住「身份一律取自信封」：伪造的载荷 SenderId 不得影响槽位归属。
+        var ks = NewKeyStore();
+        var dht = new RecordingStaticPeerDht();
+        var handler = new KeyExchangeHandler(
+            Crypto, ks, NullLogger<KeyExchangeHandler>.Instance, dht);
+
+        var peer = Crypto.GenerateKeyPair();
+        var peerId = NodeId.FromPublicKey(peer.PublicKey);
+        var victimId = NodeId.CreateRandom();
+
+        await handler.HandleAsync(new KeyExchangeMessage
+        {
+            SenderId = victimId.ToByteArray(),   // 载荷里冒充受害者
+            ConversationId = "kx",
+            EphemeralPublicKey = peer.PublicKey,
+            IsResponse = false
+        }, new FakeTcpConnection(), SignedEnvelope(peer));
+
+        ks.GetSessionKey(victimId).ShouldBeNull("会话密钥绝不能落到载荷自称的那个 NodeId 上");
+        ks.GetSessionKey(peerId).ShouldNotBeNull("会话密钥必须记在信封自洽的对端名下");
+        dht.FindRegistered(victimId).ShouldBeNull("静态对端表同样不得被载荷身份污染");
+    }
+
+    [Fact]
+    public async Task 密钥交换请求_按对方自报的监听端点登记_而非连接源端点()
+    {
+        // task-23 的正向：/connect 变双向。端点来源是**载荷里自报且被签名整体覆盖**的监听端点。
+        var ks = NewKeyStore();
+        var dht = new RecordingStaticPeerDht();
+        var handler = new KeyExchangeHandler(
+            Crypto, ks, NullLogger<KeyExchangeHandler>.Instance, dht);
+
+        var peer = Crypto.GenerateKeyPair();
+        var peerId = NodeId.FromPublicKey(peer.PublicKey);
+        // 连接的源端点是对方出站用的临时端口，与它自报的监听端点刻意不同。
+        var ephemeralSource = new System.Net.IPEndPoint(System.Net.IPAddress.Parse("192.168.1.50"), 52341);
+
+        await handler.HandleAsync(new KeyExchangeMessage
+        {
+            SenderId = peerId.ToByteArray(),
+            ConversationId = "kx",
+            EphemeralPublicKey = peer.PublicKey,
+            SenderListenEndPoint = "192.168.1.50:20091",
+            IsResponse = false
+        }, new FakeTcpConnection(ephemeralSource), SignedEnvelope(peer));
+
+        var registered = dht.FindRegistered(peerId);
+        registered.ShouldNotBeNull("带自报监听端点时必须登记，否则对端无法回话");
+        registered!.EndPoint.Port.ShouldBe(20091, "端点必须来自自报的监听端点");
+        registered.EndPoint.Address.ToString().ShouldBe("192.168.1.50");
+        registered.EndPoint.ShouldNotBe(ephemeralSource,
+            "绝不能退回用连接源端点 —— 那是临时端口，回连必然失败");
+        registered.PublicKey.ShouldBe(peer.PublicKey);
+        ks.GetSessionKey(peerId).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task 密钥交换请求_自报端点无法解析时降级为只登记身份与公钥()
+    {
+        var ks = NewKeyStore();
+        var dht = new RecordingStaticPeerDht();
+        var registry = new PeerPublicKeyRegistry();
+        var handler = new KeyExchangeHandler(
+            Crypto, ks, NullLogger<KeyExchangeHandler>.Instance, dht, registry);
+
+        var peer = Crypto.GenerateKeyPair();
+        var peerId = NodeId.FromPublicKey(peer.PublicKey);
+
+        await handler.HandleAsync(new KeyExchangeMessage
+        {
+            SenderId = peerId.ToByteArray(),
+            ConversationId = "kx",
+            EphemeralPublicKey = peer.PublicKey,
+            SenderListenEndPoint = "这不是一个合法端点",   // 旧节点/恶意/损坏
+            IsResponse = false
+        }, new FakeTcpConnection(), SignedEnvelope(peer));
+
+        dht.RegisteredStaticPeers.ShouldBeEmpty("端点不可信时不得写入静态对端表");
+        registry.TryGet(peerId, out _).ShouldBeTrue(
+            "但身份与公钥仍应被记住 —— 这是「知道是谁、只是不知道在哪」的诚实表达");
+    }
+
+    [Fact]
+    public async Task 密钥交换请求_旧版对端未带自报端点时降级为只登记身份与公钥()
+    {
+        var ks = NewKeyStore();
+        var dht = new RecordingStaticPeerDht();
+        var registry = new PeerPublicKeyRegistry();
+        var handler = new KeyExchangeHandler(
+            Crypto, ks, NullLogger<KeyExchangeHandler>.Instance, dht, registry);
+
+        var peer = Crypto.GenerateKeyPair();
+        var peerId = NodeId.FromPublicKey(peer.PublicKey);
+
+        // 不设 SenderListenEndPoint —— 模拟旧版节点（MessagePack 键缺失 → 保持 null）
+        await handler.HandleAsync(new KeyExchangeMessage
+        {
+            SenderId = peerId.ToByteArray(),
+            ConversationId = "kx",
+            EphemeralPublicKey = peer.PublicKey,
+            IsResponse = false
+        }, new FakeTcpConnection(), SignedEnvelope(peer));
+
+        dht.RegisteredStaticPeers.ShouldBeEmpty(
+            "没有权威端点就绝不写静态对端表 —— 宁可少一条，也不能写一条连不回去的");
+        registry.TryGet(peerId, out var learned).ShouldBeTrue();
+        learned.ShouldBe(peer.PublicKey);
+        ks.GetSessionKey(peerId).ShouldNotBeNull("会话密钥仍然正常建立");
+    }
+
+    [Fact]
+    public async Task 密钥交换请求_公钥与身份不自洽时_不得写入静态对端表()
+    {
+        // 登记 PublicKey 却不保证 NodeId.FromPublicKey(公钥)==NodeId，
+        // 会在静态对端表里埋下一颗毒丸，正好毒掉那一层的防冒名判定。
+        var ks = NewKeyStore();
+        var dht = new RecordingStaticPeerDht();
+        var handler = new KeyExchangeHandler(
+            Crypto, ks, NullLogger<KeyExchangeHandler>.Instance, dht);
+
+        var peer = Crypto.GenerateKeyPair();
+        var peerId = NodeId.FromPublicKey(peer.PublicKey);
+        var impostorKey = Crypto.GenerateKeyPair();
+
+        var envelope = SignedEnvelope(peer) with { SenderPublicKey = impostorKey.PublicKey };
+
+        await handler.HandleAsync(new KeyExchangeMessage
+        {
+            SenderId = peerId.ToByteArray(),
+            ConversationId = "kx",
+            EphemeralPublicKey = peer.PublicKey,
+            IsResponse = false
+        }, new FakeTcpConnection(), envelope);
+
+        dht.RegisteredStaticPeers.ShouldBeEmpty("公钥与身份不自洽时一律不登记");
+    }
+
+    [Fact]
+    public async Task 密钥交换响应_不做反向登记()
+    {
+        var ks = NewKeyStore();
+        var dht = new RecordingStaticPeerDht();
+        var handler = new KeyExchangeHandler(
+            Crypto, ks, NullLogger<KeyExchangeHandler>.Instance, dht);
+
+        var peer = Crypto.GenerateKeyPair();
+        var peerId = NodeId.FromPublicKey(peer.PublicKey);
+
+        await handler.HandleAsync(new KeyExchangeMessage
+        {
+            SenderId = peerId.ToByteArray(),
+            ConversationId = "kx",
+            EphemeralPublicKey = peer.PublicKey,
+            IsResponse = true
+        }, new FakeTcpConnection(), SignedEnvelope(peer));
+
+        dht.RegisteredStaticPeers.ShouldBeEmpty("响应侧不建立会话，也不应登记对端");
     }
 
     #endregion

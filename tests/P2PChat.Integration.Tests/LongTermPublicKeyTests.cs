@@ -224,7 +224,7 @@ public class LongTermPublicKeyTests
         var localKeyStore = new InMemoryKeyStore(crypto);
         var registry = new PeerPublicKeyRegistry();
         var handler = new KeyExchangeHandler(
-            crypto, localKeyStore, NullLogger<KeyExchangeHandler>.Instance, registry);
+            crypto, localKeyStore, NullLogger<KeyExchangeHandler>.Instance, NewDhtStub(localKeyStore), registry);
 
         var peer = crypto.GenerateKeyPair();
         var request = new KeyExchangeMessage
@@ -260,7 +260,7 @@ public class LongTermPublicKeyTests
         var localKeyStore = new InMemoryKeyStore(crypto);
         var registry = new PeerPublicKeyRegistry();
         var handler = new KeyExchangeHandler(
-            crypto, localKeyStore, NullLogger<KeyExchangeHandler>.Instance, registry);
+            crypto, localKeyStore, NullLogger<KeyExchangeHandler>.Instance, NewDhtStub(localKeyStore), registry);
 
         var peer = crypto.GenerateKeyPair();
         var request = new KeyExchangeMessage
@@ -279,6 +279,21 @@ public class LongTermPublicKeyTests
     }
 
     #region 测试脚手架
+
+    /// <summary>
+    /// KeyExchangeHandler 自 task-23 起需要 <c>IDhtService</c>（用于把「/connect 而来的对端」
+    /// 反向登记为静态对端）。本组用例不测那条路径，给一个最简替身即可。
+    /// </summary>
+    private static FakeDhtService NewDhtStub(InMemoryKeyStore keyStore)
+    {
+        var identity = keyStore.GetOrCreateIdentity();
+        return new FakeDhtService(new NodeInfo
+        {
+            NodeId = NodeId.FromPublicKey(identity.PublicKey),
+            EndPoint = new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 46701),
+            PublicKey = identity.PublicKey
+        });
+    }
 
     private enum TamperKind
     {
