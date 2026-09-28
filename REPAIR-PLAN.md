@@ -157,12 +157,12 @@
 > 📌 **本文档只写能指认来源的数字。** 权威表格与逐行测量者见
 > [`HANDOFF.md` §3.1](HANDOFF.md)；**正式门禁判据见 §7.4（必须 `-t:Rebuild`）**。
 
-- `dotnet build P2PChat.slnx -t:Rebuild`：**0 错 0 警**（Lead 亲自实跑）。
-- `dotnet test P2PChat.slnx`：**上一轮收口 340 通过 / 0 失败 / 0 跳过**（Lead 亲自实跑）。
-  演进轨迹：121 → 146 → 179 → **297** → **340** → **本轮总数未采信**（Lead 报 375/376 存疑，无人实测，
-  见 `HANDOFF.md` §3.1 —— **不选边**）。
-  上一轮分项目：`Crypto` 8 / `Core` 52 / `Chat` 110（原 0）/ `Integration` 147 / `Networking` 23。
+- `dotnet build P2PChat.slnx -t:Rebuild --no-incremental`：**0 错 0 警**（Lead 亲自实跑）。
+- `dotnet test P2PChat.slnx`：**382 通过 / 0 失败**（Lead 亲自实跑）。
+  演进轨迹：121 → 146 → 179 → **297** → **340** → **382**。
+  分项目：`Crypto` 8 / `Core` 52 / `Chat` **137**（原 0）/ `Integration` **158** / `Networking` **27**。
 - **AOT 发布**：`dotnet publish -c Release` 成功，**我方代码 0 条** IL/AOT 警告，第三方 4 条；
+  产物 exe SHA256 `D9DCB925BA346E64463BD488A6BCD0E0C3C18E42F453F08C493AEE428789F292`（Lead 亲自实跑）。
 - 阶段 0 之后新增的守卫测试：`RealDiscoveryTests`、`UpnpClientTests`、`MessageSigningTests`、
   `BencodeTests` compact-peer、群消息加密、群元数据持久化、文件 ChunkSize、
   `KnownDefectsTests` 回归守卫、`Chat.Tests`、`EnvelopeCodec` 边界测试、

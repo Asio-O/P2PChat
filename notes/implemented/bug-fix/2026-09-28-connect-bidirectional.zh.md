@@ -84,3 +84,4 @@ Status: implemented
 - [The /connect hello response was never verified at all](./2026-09-28-connect-hello-response-verification.md) —— 同一条命令的前一轮修复（验签 + 三道判据 + TOFU 措辞纪律）。本条在其之上补「B 如何知道 A 在哪」。
 - [Envelope wire codec converged onto a single source of truth in Core](./2026-09-28-envelope-codec-single-source.md) —— 「自报端点可归因」这一前提依赖载荷整体被签名覆盖。
 - [Message signing](../bug-fix/2026-09-21-message-signing.md) —— 阶段 3.2 自签名上线；`SenderListenEndPoint` 的安全性完全建立在它之上。
+- 结构守卫的自指陷阱与本仓库的既定解法 —— 见 `HANDOFF.md` §7.6。该节是这一族守卫相关纪律的归宿：它记录的两个实例（守卫抓到正在给它做注释的那条注释；普通对话里出现「自指」二字就触发该守卫）属于本记录 `## Comment discipline` 所论证的同一纪律在**结构守卫**这一支上的形态。

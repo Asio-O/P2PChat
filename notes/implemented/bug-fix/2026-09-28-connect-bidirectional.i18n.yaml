@@ -15,6 +15,7 @@ members:
       - Alternatives considered
       - Consequences
       - Comment discipline
+      - Testing
       - Deferred
       - Related
     tokens: []
@@ -27,6 +28,7 @@ members:
       - Alternatives considered
       - Consequences
       - Comment discipline
+      - Testing
       - Deferred
       - Related
     tokens: []
