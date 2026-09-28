@@ -1,0 +1,61 @@
+# Agent Note: /connect 变双向 —— 监听端点只能由发起方自报
+
+Status: implemented
+
+## Problem
+
+`/connect <ip:port>` 此前是**单向**的：A 拿到 B 的 NodeId 与端点，从此 B 的公钥与身份都在 A 手里；但**B 知道 A 是谁，却不知道 A 在哪**。典型症状是「同一局域网内一台能连公网、一台不能，不能连公网的那台永远查不到对方」——因为它既没有对方的端点，也没有对方的 DHT 解析结果。
+
+最初的修复方向是：在应答侧用 `senderConnection.RemoteEndPoint` 拿到对端地址，写进静态对端表。**这个方向是错的**，而且错得很具体：`RemoteEndPoint` 是**这条出站连接的源端点**，其本地端口由内核从 ephemeral 范围动态分配，与该节点真正的 TCP 监听端口毫无关系。把 ephemeral 端口登记成「对端在哪」，回连时必然被拒。更糟的是 `FindNodeAsync` **静态对端优先**（`MainlineDhtService.cs:243`），于是一条「对端 IP:临时端口」的废记录会**永久遮蔽**该对端的 DHT 解析路径——它把一个「连不上」升级成了「再也解析不到」。
+
+根因不在实现疏忽，而在于协议本身：**三次握手只携带源 IP 与源端口，从不携带对端的监听端口。** 应答侧在协议层根本拿不到这个信息——它必须由发起方自己说。
+
+## Decision
+
+**让发起方在 hello 载荷里自报监听端点**，应答侧据此做反向登记：
+
+- 新增 `KeyExchangeMessage.SenderListenEndPoint`（`[Key(12)]`，`string?`）。该字段位于**被签名整体覆盖的 Payload 内**，所以「A 声称自己监听 P」是**可归因**的：改一个字就验签失败。它取自 `IDhtService.LocalNode.EndPoint`，即本机的局域网 IP + TCP 监听端口。
+- 该属性刻意用 `init` 且**不带初始化器**：与 `Message.MessageId` 那条注释同源——`init` + 初始化器在反序列化时会被 MsgPack 无条件重置为 default；不带初始化器时**键缺失即不赋值、保持 null**，而这正是「老版本对端不带此字段」所需要的降级语义。
+- 应答侧 `KeyExchangeHandler.RegisterInboundPeer` **优先用自报端点**；字段缺失（旧版对端）或 `EndpointText` 解析失败时**降级**：只把身份与公钥记入 `PeerPublicKeyRegistry`，**不写静态对端表**。
+- 降级分支里**不「随手 = null 填端点」**——`NodeInfo.EndPoint` 是 `required`（`NodeInfo.cs:51`），模型层没有这个选项。静态对端表的语义是「我知道它**在哪**」，当前模型无法表达「身份已知、端点未知」的条目；要让它容纳这种条目，必须先把 `EndPoint` 改成可空，那是一次波及 `FindNodeAsync`、连接池与群消息扇出每一处的模型变更。把这个代价写清楚，下一个人才不会以为只是漏写一行。
+- **身份来源统一为信封**：跨 `MessageRouter` 派发时，加载荷 `SenderId` 必须等于信封 `SenderId`；本处理器自身取身份也只走 `TrySenderNodeId(envelope)`，并**刻意不提供「从载荷取」的兜底**。
+- 登记前的自检：公钥与身份不自洽（`publicKeyBound == false`）时**不登记**——那时 `NodeId` 与公钥对不上，写进静态对端表就是一颗毒丸。登记失败也不影响密钥交换本身（会话密钥此时已建立），但必须留痕，否则用户只看到「对方连不上我」而日志里一行都没有。
+
+## Alternatives considered
+
+**用 `senderConnection.RemoteEndPoint` 登记静态对端**（最初的方案）。否决，根因要说到底：**监听端口这个信息在应答侧根本不存在**。三次握手不携带对端监听端口，`RemoteEndPoint` 给的是**本次连接的内核分配临时端口**，与「那个节点平时在哪里监听」在语义上毫无关系。这不是实现疏忽，是协议层没有这个信息。除此之外还有第二重代价：静态对端优先于 DHT 解析，所以一条废记录不只是连不上，而是**永久遮蔽**该对端此后所有的发现路径。**这也是本记录最想留下的教训：一个在语法上完全成立、编译通过、语义上却指向另一个东西的字段，比一个明显错误的字段危险得多。**
+
+**把 `NodeInfo.EndPoint` 改成可空，让静态对端表能容纳「身份已知、端点未知」的条目。** 否决：本轮不做。那是一次模型层变更，波及 `FindNodeAsync` 的解析顺序、连接池的键设计、以及群消息扇出对每一条成员的可达性判断——不是顺手能改的。降级到 `PeerPublicKeyRegistry` 是等价且零风险的表达方式。
+
+**用 `contacts.json` 里的联系人做端点/身份绑定。** 否决：那是**用户的意图**，不是「我们亲眼验过的身份」。把用户手写的 NodeId + ip:port 当成已验证的绑定，等于把一次带外的人工断言升级成系统级安全断言——用户的笔误会变成安全策略的输入。
+
+## Consequences
+
+- `/connect` 从单向变双向：A `/connect` 一次之后，B 也能反向找到 A，**发起方不必再 `/add` 或反向 `/connect` 一次**。「局域网内一台能连公网、一台不能」这个场景得以成立。
+- **代价：自报端点只在同一局域网内正确。** 发送方填的是**局域网 IP + 监听端口**，对**跨 NAT 的对端不可达**（私网 IP 出了 NAT 就没有意义）。跨 NAT 场景本来靠 DHT 解析拿到公网端点、不走 `/connect` 的反向登记，因此不受影响——但这条适用边界必须写在代码注释里，否则下一个人会以为它是个通用机制。
+- **代价：老版本对端连不上反向路径。** 不带该字段的旧节点会走降级分支：B 记下 A 的身份与公钥，但**不写静态对端表**，即 A 仍无法回话。降级是显式的（`LogInformation` 说明原因并指向 `PeerPublicKeyRegistry`），不是静默失败——但用户侧的体验就是「对方连不上我」。
+- **反向可达性是「对方愿意被你找到」的副产物。** B 之所以知道 A 在哪，是因为 A 在 hello 里主动说了；这是可归因的**声明**，不是 B 独立验证出来的结论。
+- 新增 `[Key(12)]` 是线路字段新增，但 MessagePack 的 key-as-array-index 语义保证**插入新键不移位**，故与既有格式兼容。
+
+## Comment discipline
+
+本轮再次撞上同一个家族问题：**注释声称的保证，必须在当前这条代码路径上真实存在。** 这是第三次出现在同一片代码里，因此值得单列而不是当作个案。
+
+**实例一（已修正的历史实例）。** `KeyExchangeHandler.HandleAsync` 历史上出现过一处自相矛盾：同一个方法里，**相距六行**，一处用载荷的 `SenderId` 取身份、另一处用信封的 `SenderId`。两行都「看起来对」，但只有后者可信——载荷里的 `SenderId` 是对端完全可控的输入。这不是纯粹的卫生问题：这个值是 `SetSessionKey` 的**键**，用错的后果不是一次报错，而是此后所有针对该对端的私聊都去查一个空会话槽位、报文发出去了、对端也在收、界面永远没内容、且现场几乎无迹可循。代码注释里现在记着这件事（`KeyExchangeHandler.cs:144`：「历史上本方法就出现过『相距 6 行，一个信载荷一个信封』的自相矛盾，已修正」）。
+
+**实例二（当前仍存在）。** `RegisterInboundPeer` 的 XML 注释把四条列为「安全约束（供将来实现时保留，一条都不能省）」，其中第四条是「**不得覆盖已存在的条目**：已登记的端点可能比新观测到的更可信」。但调用处没有任何这样的判断，而 `MainlineDhtService.RegisterStaticPeer` 的实现是**无条件覆盖**（`_staticPeers[node.NodeId.ToHexString()] = node;`）。也就是说这条「一条都不能省」的约束，在当前代码路径上**并不成立**。若要真正实现它，应该落在 `RegisterStaticPeer` 里加「已存在则不覆盖」，或者在 `RegisterInboundPeer` 调用前显式判存——而不是留在注释里。注释写「这条一条都不能省」，读者会据此以为它已经被省掉地实现了。
+
+**附带一条方法论上的教训。** 撰写本记录时，有人转述「`EvaluatePeerIdentity` 的『宁可拒绝』是死代码」。回到代码核对后，这个断言不成立：那段代码**确实实现了**不 early-return、冲突优先于匹配，并且有直接用例 `端点身份判定_同一端点换了身份必须判为冲突_这是唯一能拒自签攻击者的手段` 覆盖它。于是它没有作为「注释/代码不一致」的第二个实例被写进本记录。**一个未经核对的断言，一旦被写进永久档案，就会成为下一代人的「既成事实」——这与一段错误的注释是同一种危害，只是传播路径不同。**
+
+## Deferred
+
+- `NodeInfo.EndPoint` 仍为 `required`，因此静态对端表无法表达「身份已知、端点未知」。降级条目目前寄居在 `PeerPublicKeyRegistry`。若将来希望这类对端也能被 `/msg` 直接找到，需要先做那次模型变更。
+- 「不得覆盖已存在的静态对端条目」这条约束**尚未落地**（见 `## Comment discipline` 实例二），当前 `RegisterStaticPeer` 仍是无条件覆盖。补它需要一个明确的产品判断：一次 `/connect` 自报的端点，与一条用户手工登记的静态对端条目，冲突时以谁为准。
+- `/connect` 的双向链路仍无端到端 e2e 断言（`scripts/e2e-verify.ps1` 的 Phase 2 覆盖的是 `/msg` 私聊往返）。
+
+## Related
+
+- [/connect <ip:port> — blind connect](../feature/2026-09-21-blind-connect.md) —— 本条把它从单向补成双向；该记录中「`/connect` 不需预知对端 NodeId」的模型不变。
+- [The /connect hello response was never verified at all](./2026-09-28-connect-hello-response-verification.md) —— 同一条命令的前一轮修复（验签 + 三道判据 + TOFU 措辞纪律）。本条在其之上补「B 如何知道 A 在哪」。
+- [Envelope wire codec converged onto a single source of truth in Core](./2026-09-28-envelope-codec-single-source.md) —— 「自报端点可归因」这一前提依赖载荷整体被签名覆盖。
+- [Message signing](../bug-fix/2026-09-21-message-signing.md) —— 阶段 3.2 自签名上线；`SenderListenEndPoint` 的安全性完全建立在它之上。

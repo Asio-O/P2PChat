@@ -1395,7 +1395,7 @@ Git 历史：`06cc4e8` 初始提交 → `c971054` 数据目录迁移 → `21cba0
 4. **想改 `/connect` 或任何入站路径的身份校验** → 先读 §3.6 的三道判据与 `HelloResponseVerificationTests`；`P2PChatTui.cs` 里**不得**出现任何自行实现的信封解析或验签（结构守卫会红）
 5. **想改聊天事件流** → 只经 `IChatEventPublisher.PublishAsync`；`ChatService` 是那条通道的唯一持有者。`ChatEventDeliveryTests` 里有扫源码的结构守卫与负向对照
 6. **想改加密** → `Crypto/Encryption/AesGcmEncryptionService.cs`（密文布局会被 `Decrypt` 与 `GroupChatService` 依赖）
-7. **想改节点发现** → `Networking/Dht/MainlineDhtService.cs` + `Bencode.cs`（含 `announce_peer` / `get_peers` 闭环与 `p2pc_peers` 扩展字段）
+7. **想改节点发现** → `Networking/Dht/MainlineDhtService.cs` + `Bencode.cs`（含 `announce_peer` / `get_peers` 闭环与 `p2pc_peers` 扩展字段）。⚠️ **动这块前先读 §6.5** —— 它说明这套机制在真实公网上**做不到**什么，否则很容易把「宣告」当成「能自动找到人」
 8. **想改 NAT 穿透** → `Networking/Transport/UpnpClient.cs` + `MainlineDhtService.ApplyMapping`；**注意是手写 SOAP，没有 COM，不能引入 XML 解析库**
 9. **想加 TUI 命令** → `UI/Views/P2PChatTui.cs` 的 `ProcessCommandAsync` + `ShowHelp`（plain 模式与交互模式共用 `SubmitLine` 分派）
 10. **想加配置项** → `Program.cs` 的 `chatConfig.GetValue<T>(...)` + README 配置表
