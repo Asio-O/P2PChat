@@ -50,8 +50,10 @@ public class FileTransferIntegrityTests : IDisposable
         };
         var dht = new FakeDhtService(local);
         var router = new RecordingMessageRouter();
+        // FileTransferService 自 task-28 起从 IKeyStore 取本机身份（与 MessageRouter 写信封 SenderId 同源）。
+        var keyStore = new InMemoryKeyStore(encryption);
         var service = new FileTransferService(
-            dht, router, encryption, NullLogger<FileTransferService>.Instance);
+            dht, router, encryption, keyStore, NullLogger<FileTransferService>.Instance);
         return (service, dht, router, local, remote);
     }
 
@@ -90,6 +92,53 @@ public class FileTransferIntegrityTests : IDisposable
         }
         catch (OperationCanceledException) { }
         throw new TimeoutException($"等待文件传输终态超时 ({timeoutMs}ms)");
+    }
+
+    [Fact]
+    public async Task 载荷SenderId必须取自IKeyStore身份_而非DHT的LocalNode()
+    {
+        // task-28 的回归守卫。
+        //
+        // 缺陷：`FileTransferService.GetLocalNodeId()` 此前取自 `_dht.LocalNode.NodeId`，
+        // 而 `MessageRouter` 写信封 SenderId 用的是 `_keyStore.GetOrCreateIdentity().NodeId`
+        // —— 两个**独立真相源**，今天相等只因为 Program.cs 装配时用同一个 IKeyStore
+        // 派生了 DHT LocalNode 并冻结进不可变的 NodeInfo 记录。
+        // 一旦分叉，本服务写进载荷的 SenderId 就与信封不自洽，会被
+        // `MessageRouter.RouteIncomingAsync` 的「载荷/信封 SenderId 一致性」检查整条拒掉，
+        // 用户看到的却是「文件传不过去」，现场极难归因。
+        //
+        // 关键手法：把两个来源**故意设成不同**（LocalNode 随机、keyStore 另有身份），
+        // 因此只要实现回退到 `_dht.LocalNode.NodeId`，下面第二条断言立刻红。
+        var encryption = new AesGcmEncryptionService(NullLogger<AesGcmEncryptionService>.Instance);
+        var keyStore = new InMemoryKeyStore(encryption);
+        var local = new NodeInfo
+        {
+            NodeId = NodeId.CreateRandom(),       // 刻意 ≠ keyStore 身份
+            EndPoint = new IPEndPoint(IPAddress.Loopback, 45001),
+            PublicKey = new byte[32]
+        };
+        var remote = new NodeInfo
+        {
+            NodeId = new NodeId(SenderId()),
+            EndPoint = new IPEndPoint(IPAddress.Loopback, 45002),
+            PublicKey = new byte[32]
+        };
+        var dht = new FakeDhtService(local);
+        var router = new RecordingMessageRouter();
+        var service = new FileTransferService(
+            dht, router, encryption, keyStore, NullLogger<FileTransferService>.Instance);
+        dht.Register(remote);
+
+        var srcPath = Path.Combine(_root, "src-identity.bin");
+        await File.WriteAllBytesAsync(srcPath, new byte[64]);
+
+        await service.SendOfferAsync(remote.NodeId, srcPath);
+
+        var meta = router.Sent.OfType<FileMetaMessage>().Single();
+        meta.SenderId.ShouldBe(keyStore.GetOrCreateIdentity().NodeId.ToByteArray(),
+            "载荷 SenderId 必须与 MessageRouter 写信封用的是同一份身份");
+        meta.SenderId.ShouldNotBe(local.NodeId.ToByteArray(),
+            "DHT 的 LocalNode 是独立的发现用记录，不是身份真相源 —— 用它会被入站一致性检查整条拒掉");
     }
 
     [Fact]

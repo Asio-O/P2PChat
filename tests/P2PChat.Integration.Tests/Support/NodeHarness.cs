@@ -173,7 +173,8 @@ public sealed class NodeHarness : IAsyncDisposable
             Chat = chat,
             Events = chat,
             Group = new GroupChatService(dht, router, encryption, keyStore, new InMemoryGroupMetadataStore()),
-            Files = new FileTransferService(dht, router, encryption, NullLogger<FileTransferService>.Instance),
+            Files = new FileTransferService(
+                dht, router, encryption, keyStore, NullLogger<FileTransferService>.Instance),
             KeyStore = keyStore,
             Dht = dht,
             Encryption = encryption,

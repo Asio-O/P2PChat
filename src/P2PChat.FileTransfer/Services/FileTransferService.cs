@@ -15,6 +15,7 @@ public class FileTransferService : IFileTransferService
     private readonly IDhtService _dht;
     private readonly IMessageRouter _router;
     private readonly IEncryptionService _encryption;
+    private readonly IKeyStore _keyStore;
     private readonly ILogger<FileTransferService> _logger;
 
     // 活跃的传输状态管理
@@ -27,15 +28,23 @@ public class FileTransferService : IFileTransferService
     public IAsyncEnumerable<FileTransferProgress> OnProgressChanged => _progressChannel.Reader.ReadAllAsync();
     public IAsyncEnumerable<FileMetaMessage> OnFileOfferReceived => _offerChannel.Reader.ReadAllAsync();
 
+    /// <param name="keyStore">
+    /// 本机身份来源，<b>必填</b>。用于让本服务写进载荷的 SenderId 与
+    /// <c>MessageRouter</c> 强制写入信封 SenderId 的那份<b>同源</b> ——
+    /// 两个独立真相源一旦分叉，载荷会被入站的「载荷/信封 SenderId 一致性」检查整条拒掉。
+    /// 刻意不给默认值：漏注入会静默退回到错误的身份来源。
+    /// </param>
     public FileTransferService(
         IDhtService dht,
         IMessageRouter router,
         IEncryptionService encryption,
+        IKeyStore keyStore,
         ILogger<FileTransferService> logger)
     {
         _dht = dht;
         _router = router;
         _encryption = encryption;
+        _keyStore = keyStore ?? throw new ArgumentNullException(nameof(keyStore));
         _logger = logger;
         _progressChannel = Channel.CreateUnbounded<FileTransferProgress>();
         _offerChannel = Channel.CreateUnbounded<FileMetaMessage>();
@@ -339,9 +348,29 @@ public class FileTransferService : IFileTransferService
         await _progressChannel.Writer.WriteAsync(progress);
     }
 
+    /// <summary>
+    /// 本节点身份 —— <b>与 <c>MessageRouter</c> 强制写入信封 <c>SenderId</c> 的那份同源</b>。
+    /// <para>
+    /// 这里曾经取自 <c>_dht.LocalNode.NodeId</c>，那是一个**独立的真相源**：<c>MessageRouter</c>
+    /// 发送时用的是 <c>_keyStore.GetOrCreateIdentity().NodeId</c>，两者今天相等**只是因为
+    /// <c>Program.cs</c> 在装配时用同一个 <c>IKeyStore</c> 单例派生了 DHT 的 LocalNode
+    /// 并冻结进那条不可变的 <c>NodeInfo</c> 记录里。
+    /// </para>
+    /// <para>
+    /// 一旦两者分叉（身份文件被重新生成、或任何代码用另一个 keyStore 构造 DHT LocalNode），
+    /// 本方法产出的载荷 SenderId 就与信封不自洽，而
+    /// <c>MessageRouter.RouteIncomingAsync</c> 的「载荷 SenderId ≠ 信封 SenderId 即拒」
+    /// 会把它整条拒掉 —— 用户看到的是「文件传不过去」，日志里只有一条与「文件」毫无关系的
+    /// 告警，现场极难归因。这与 <c>KeyExchangeHandler</c> 曾经的载荷/信封不一致是**同一族**缺陷。
+    /// </para>
+    /// <para>
+    /// 刻意<b>在发送时读取</b>而不是缓存到字段：与 <c>MessageRouter</c> 的读取时机对齐，
+    /// 身份若真的发生变更，两边会看到同一个值，而不是一方停留在旧值。
+    /// </para>
+    /// </summary>
     private byte[] GetLocalNodeId()
     {
-        return _dht.LocalNode.NodeId.ToByteArray();
+        return _keyStore.GetOrCreateIdentity().NodeId.ToByteArray();
     }
 
     #endregion

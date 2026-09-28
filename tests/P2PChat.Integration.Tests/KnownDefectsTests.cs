@@ -238,7 +238,7 @@ public class KnownDefectsTests
             };
             var receiver = new FileTransferService(
                 new FakeDhtService(local), new RecordingMessageRouter(), encryption,
-                NullLogger<FileTransferService>.Instance);
+                new InMemoryKeyStore(encryption), NullLogger<FileTransferService>.Instance);
 
             const int customChunk = 1024;
             var data = new byte[customChunk * 4];
@@ -382,7 +382,7 @@ public class KnownDefectsTests
             };
             var receiver = new FileTransferService(
                 new FakeDhtService(local), new RecordingMessageRouter(), encryption,
-                NullLogger<FileTransferService>.Instance);
+                new InMemoryKeyStore(encryption), NullLogger<FileTransferService>.Instance);
 
             var data = new byte[2048];
             Random.Shared.NextBytes(data);

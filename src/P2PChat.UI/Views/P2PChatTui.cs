@@ -318,11 +318,23 @@ public sealed class P2PChatTui(
 
     /// <summary>
     /// 本机与指定对端之间私聊会话的方向无关键。
-    /// 必须与 <c>ChatService.SendPrivateMessageAsync</c> 使用同一个函数，
-    /// 否则接收到的消息会落进一个 UI 选不中的会话桶。
+    /// 必须与 <c>ChatService.SendPrivateMessageAsync</c> 使用同一个函数、
+    /// 且本机身份必须取自<b>同一个来源</b>，否则接收到的消息会落进一个 UI 选不中的会话桶。
+    /// <para>
+    /// ⚠️ 这里此前取 <c>dhtService.LocalNode.NodeId</c>，而 <c>ChatService</c> 取
+    /// <c>keyStore.GetOrCreateIdentity().NodeId</c> —— 两个<b>独立真相源</b>。
+    /// <c>NodeInfo</c> 是 record + init，LocalNode 里的 NodeId 是<b>启动时派生后冻结</b>的值；
+    /// keyStore 则是<b>发送时现读</b>。只要身份在进程内变化过（例如身份文件被重新生成，
+    /// 或任何代码用另一个 keyStore 构造了 DHT LocalNode），两者就分叉。
+    /// </para>
+    /// <para>
+    /// <b>为什么这个分叉比 FileTransferService 的那个更隐蔽</b>：分叉后 <c>ConversationId</c>
+    /// 两边算不出同一个值，消息仍会被正常收发，只是落进一个 UI <b>永远选不中</b>的会话桶 ——
+    /// <b>没有任何拒绝日志</b>，用户只看到「消息发不出去」。
+    /// </para>
     /// </summary>
     private string PrivateConversationKey(NodeId peerId)
-        => ConversationId.ForPrivate(dhtService.LocalNode.NodeId, peerId);
+        => ConversationId.ForPrivate(keyStore.GetOrCreateIdentity().NodeId, peerId);
 
     private async Task ProcessCommandAsync(string command)
     {
