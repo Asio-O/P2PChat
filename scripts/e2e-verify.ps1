@@ -503,10 +503,65 @@ try {
         # 给 DHT 启动循环与后台线程一点时间（避免 stdin 写入抢跑）
         Start-Sleep -Seconds 2
 
-        # 通过 Node A 的 stdin 注入 `/msg nodeB <plaintext>` 命令
+        # ---- 先把「按真实身份寻址」这件事做对，再谈明文往返 --------------------
+        # ⚠️ **本段是 2026-09-29 补的，原因是它暴露了一个此前一直被掩盖的脚本缺陷。**
+        #
+        # 上面预置的 contacts.json 里写的是 **Phase 1 的** nodeB 的 NodeId（$idB），
+        # 但 Phase 2 的 nodeB2 跑在**全新数据目录** dataB2 下 ⇒ **它有完全不同的 NodeId 与密钥对**
+        # （本脚本 A35 段的注释在下方已经写明了这一点，那一段当时改对了，A30–A34 漏改）。
+        #
+        # 为什么以前没暴露：`ChatService` 的密钥交换应答读取路径此前**零校验**，
+        # 只反序列化就取用对端给的临时公钥 ⇒ 拿着一个**对不上的 NodeId** 去握手，居然能走通。
+        # 本轮给该路径补上「签名者必须是预期对端」之后，脚本终于在正确的位置失败。
+        #
+        # ⇒ **这种失败是安全修复生效的证据，不是回归。** 脚本才是需要修的一方：
+        # 它一直在断言一个「按错误身份寻址」的场景，而那个场景此前之所以"能过"，
+        # 恰恰是因为产品缺了本该有的检查（REPAIR-PLAN B7 的同型案例：绿的那条指向的不是要证明的东西）。
+        #
+        # 修法与 A35 段保持一致：取 nodeB2 的**真实** NodeId 再寻址。
+        # **别名刻意用 nodeB2live 而不是复用 nodeB** —— 预置那条 stale 联系人仍在 contacts.json 里，
+        # 同名会让 FindContact 的别名匹配 FirstOrDefault 取到 stale 那条
+        # （这本身是另一个已登记的开放缺陷，见 HANDOFF §8）。
+        #
+        # ⚠️ **必须等，不能用固定 sleep**：`本地节点ID` 是在 UPnP 探测**之后**才写的，
+        # 比 `TCP监听已启动` 晚约 3 秒（实测 16:02:57.874 vs 16:03:00.888）。
+        # 在固定 2 秒后去解析必然读不到 —— 首版就是这么写的，A29c 直接 FAIL。
+        $liveAlias = 'nodeB2live'
+        $b2LiveNodeId = $null
+        $nodeIdReady = Wait-Until -TimeoutSeconds 30 -IntervalMs 500 -Condition {
+            $script:b2LiveNodeId = Get-Field -Text (Read-NodeLog -DataDir $dataDirB2) -Pattern '本地节点ID:\s+([0-9a-f]{40})'
+            -not [string]::IsNullOrWhiteSpace($script:b2LiveNodeId)
+        }
+        if ($nodeIdReady -and $b2LiveNodeId) {
+            # ⚠️ **参数顺序必须是 `<节点ID> <ip:port> <别名>`** —— 签名是
+            # `/add <节点ID(hex,40位)> [ip:port] [别名]`。曾把它写成
+            # `<节点ID> <别名> <ip:port>`，结果别名被存成了
+            # 「nodeB2live 127.0.0.1:20092」这一整串（两段被并进同一个别名），
+            # 于是随后的 `/msg nodeB2live` 找不到联系人、静默无输出。
+            # —— 该症状在 nodeA2 日志里是一行 `添加联系人: nodeB2live 127.0.0.1:20092 (…)`。
+            $cmdAddLive = "/add $b2LiveNodeId 127.0.0.1:$NodeBTcpPort $liveAlias"
+            foreach ($c in $cmdAddLive.ToCharArray()) {
+                $nodeA2.Proc.StandardInput.Write($c)
+                Start-Sleep -Milliseconds 30
+            }
+            $nodeA2.Proc.StandardInput.Write("`n")
+            $nodeA2.Proc.StandardInput.Flush()
+
+            # 等 /add 真正落盘（ContactService 的日志），避免抢跑
+            $addLiveOk = Wait-Until -TimeoutSeconds 15 -Condition {
+                (Read-NodeLog -DataDir $dataDirA2) -match ('添加联系人:\s*' + $liveAlias + '\s*\(')
+            }
+            Add-Result 'A29c' 'Phase 2：nodeA2 已按 nodeB2 的**真实** NodeId 登记联系人（预置的 Phase 1 旧 id 不可用于寻址）' `
+                $(if ($addLiveOk) { 'PASS' } else { 'FAIL' }) "nodeB2 真实 NodeId=$b2LiveNodeId 别名=$liveAlias"
+        } else {
+            Add-Result 'A29c' 'Phase 2：取到 nodeB2 的真实 NodeId（按真实身份寻址的前提）' 'FAIL' `
+                "30s 内未在 nodeB2 日志解析到 NodeId（等到了=$nodeIdReady 值='$b2LiveNodeId'）"
+        }
+
+        # 通过 Node A 的 stdin 注入 `/msg nodeB2live <plaintext>` 命令
         # TUI 用 Console.ReadKey 单字符读取，所以逐字符写 + 30ms 间隔；明文用 ASCII + '-' 无空格，匹配 /msg 命令切分逻辑。
         $plaintext = "HELLO-E2E-$([guid]::NewGuid().ToString('N').Substring(0,8))"
-        $cmd = "/msg nodeB $plaintext"
+        $cmd = "/msg $liveAlias $plaintext"
         foreach ($c in $cmd.ToCharArray()) {
             $nodeA2.Proc.StandardInput.Write($c)
             Start-Sleep -Milliseconds 30
@@ -539,7 +594,7 @@ try {
         # （src/P2PChat.Chat/Handlers/PrivateMessageHandler.cs:84，[DBG] 级，
         #   每条被 handler 处理的消息恰好一行），而不是 stdout 事件行 ——
         #   stdout 要等进程退出后 ReadToEndAsync 才能整体读到，那时已经太晚。
-        $cmdDup = "/msg nodeB $plaintext"
+        $cmdDup = "/msg $liveAlias $plaintext"
         foreach ($c in $cmdDup.ToCharArray()) {
             $nodeA2.Proc.StandardInput.Write($c)
             Start-Sleep -Milliseconds 30

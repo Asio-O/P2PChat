@@ -9,6 +9,7 @@ using P2PChat.Core.Enums;
 using P2PChat.Core.Models;
 using P2PChat.Crypto.Keys;
 using P2PChat.Core.Extensions;
+using P2PChat.Crypto.Encryption;
 
 namespace P2PChat.Chat.Tests.Support;
 
@@ -263,6 +264,42 @@ public sealed class FakeTcpConnection : ITcpConnection
     /// <summary>收到出站帧时触发的回调（用于在测试中扮演对端）。</summary>
     public Func<ReadOnlyMemory<byte>, Task>? OnSend { get; set; }
 
+    /// <summary>
+    /// 入站数据的<b>惰性</b>生产者：入站队列为空时现场造一帧并返回。
+    /// <para>
+    /// 为什么需要它：密钥交换应答必须<b>回显本次请求的一次性关联标识</b>，而该标识是在
+    /// 请求发出那一刻才随机生成的 —— 预置一帧固定应答在有回显校验之后必然失败。
+    /// 本回调在 <c>ChatService</c> 已经把请求交给路由器<b>之后</b>才被调用，
+    /// 因此回调内部可以安全地回头去读那条已记录的本方请求。
+    /// </para>
+    /// <para>
+    /// <b>造出的帧不会被重新排入队列</b>：它代表「对端此刻刚发来的一条应答」，
+    /// 读完即消费。若把它留在队列里，下一次读取会拿到这条<b>陈旧</b>的应答 ——
+    /// 同一连接上做第二次交换时，判据①会因关联标识不匹配而拒绝，用例于是测到的是
+    /// 判据①而不是它想测的东西。
+    /// </para>
+    /// <para>
+    /// 要让「同一条消息」被投递两次，由用例自己固定 <c>messageId:</c> 重新造帧
+    /// （见 <c>KeyExchangeResponseVerificationTests</c> 的重放用例），不要靠队列残留。
+    /// 注意造不出「字节完全相同」的两帧：那样关联标识也相同，判据①会先拦下，
+    /// 重放防护反而没机会执行。
+    /// </para>
+    /// </summary>
+    public Func<byte[]>? OnReceiveWhenEmpty { get; set; }
+
+    /// <summary>
+    /// 置 true 时，入站队列为空**且**没有 <see cref="OnReceiveWhenEmpty"/> 就
+    /// <b>一直等到 <paramref name="ct"/> 被取消</b>，而不是立刻抛
+    /// <see cref="InvalidOperationException"/>。
+    /// <para>
+    /// 用来扮演「连得上、但永远不回应的对端」：真实 TCP 读取会阻塞在 socket 上，
+    /// 既有替身却立刻抛异常 —— 于是<b>超时那条分支在测试里永远走不到</b>，
+    /// 而它恰恰是最要命的一条（无超时 = 整个 TUI 卡死）。取消后会抛
+    /// <see cref="OperationCanceledException"/>，与真实 socket 读被取消时的行为一致。
+    /// </para>
+    /// </summary>
+    public bool BlockOnReceiveWhenEmpty { get; set; }
+
     public Task SendAsync(ReadOnlyMemory<byte> data, CancellationToken ct = default)
     {
         var copy = data.ToArray();
@@ -274,11 +311,18 @@ public sealed class FakeTcpConnection : ITcpConnection
         return OnSend?.Invoke(copy) ?? Task.CompletedTask;
     }
 
-    public Task<ReadOnlyMemory<byte>> ReceiveMessageAsync(CancellationToken ct = default)
+    public async Task<ReadOnlyMemory<byte>> ReceiveMessageAsync(CancellationToken ct = default)
     {
         lock (_gate)
         {
-            if (_inbound.Count > 0) return Task.FromResult(_inbound.Dequeue());
+            if (_inbound.Count > 0) return _inbound.Dequeue();
+        }
+        if (OnReceiveWhenEmpty is { } produce)
+            return produce();
+        if (BlockOnReceiveWhenEmpty)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            ct.ThrowIfCancellationRequested();
         }
         ct.ThrowIfCancellationRequested();
         throw new InvalidOperationException("没有可用的入站数据");
@@ -332,6 +376,20 @@ public static class TestRouters
             transport, serializer, encryption, keyStore, guard,
             logger ?? NullLogger<MessageRouter>.Instance);
     }
+}
+
+/// <summary>
+/// <c>ChatService</c> 构造所需的真实重放防护。
+/// <para>
+/// 与 <see cref="TestRouters"/> 同一个纪律：<b>只能注入真实实现</b>。
+/// <c>ChatService</c> 的密钥交换应答读取路径自己持有一份重放防护（它走不到
+/// <c>MessageRouter.RouteIncomingAsync</c>），换成「永远放行」的假实现就等于测试环境里
+/// 那一层根本不存在，守卫会被误删而用例照样全绿。
+/// </para>
+/// </summary>
+public static class TestReplayGuards
+{
+    public static MessageReplayGuard Create() => new(NullLogger<MessageReplayGuard>.Instance);
 }
 
 /// <summary>
@@ -462,6 +520,85 @@ public sealed class RecordingMessageRouter : IMessageRouter
         => Task.FromResult(Connection);
 
     public Task CloseConnectionAsync(byte[] nodeId) => Task.CompletedTask;
+}
+
+/// <summary>
+/// 构造「对端发来的密钥交换应答」线帧的工厂。
+/// <para>
+/// <b>为什么测试不能自己手拼未签名的应答帧</b>：阶段 3.2 之后线上每条信封都必须带 ECDSA 签名，
+/// 而 <c>ChatService.ReadKeyExchangeResponseAsync</c> 会验签并要求签名者就是它预期联系的对端。
+/// 手拼一条无签名 / 用别人密钥签名的帧，测到的不是「正常握手能不能走通」，
+/// 而是「防护有没有生效」—— 那是负向用例，归 <c>KeyExchangeResponseVerificationTests</c>。
+/// 本工厂让正向用例只声明「谁签、临时公钥是谁的、回显哪个关联标识」，
+/// 其余（签名、公钥-SenderId 绑定、MessageId）由 <c>MessageRouter.SignEnvelope</c> 负责，
+/// 与生产代码走同一条实现。
+/// </para>
+/// </summary>
+public static class KeyExchangeResponseFrames
+{
+    private static readonly ISerializer Wire = new MessagePackSerializer();
+
+    /// <summary>
+    /// 造一条由 <paramref name="signer"/> 签名的密钥交换<b>应答</b>线帧。
+    /// <para>
+    /// <b>只造应答（<c>IsResponse = true</c>），不造请求。</b> 请求帧的覆盖面归
+    /// <c>KeyExchangeIdentityTests</c> —— 它需要「信封 SenderId 与载荷 SenderId 可以不一致」，
+    /// 而本工厂的二者同源于 <paramref name="signer"/>，结构上就做不到。
+    /// </para>
+    /// </summary>
+    /// <param name="signer">应答方身份（其 <c>NodeId</c> 必须是 <c>NodeId.FromPublicKey(PublicKey)</c>）。</param>
+    /// <param name="ephemeralPublicKey">应答方的 ECDH 临时公钥。</param>
+    /// <param name="correlationId">要回显的关联标识。</param>
+    /// <param name="messageId">
+    /// 显式指定消息 ID。默认每次新生成（与生产一致）。
+    /// 需要构造「同一条消息被投递两次」时必须复用同一个值 ——
+    /// 重放防护的键就是它，而重放防护正是那条用例要单独验证的判据。
+    /// </param>
+    public static byte[] Create(
+        KeyPair signer,
+        byte[] ephemeralPublicKey,
+        string correlationId,
+        Guid? messageId = null)
+    {
+        var id = messageId ?? Guid.NewGuid();
+        var payload = new KeyExchangeMessage
+        {
+            MessageId = id,
+            SenderId = signer.NodeId.ToByteArray(),
+            ConversationId = correlationId,
+            EphemeralPublicKey = ephemeralPublicKey,
+            IsResponse = true
+        };
+
+        var unsigned = new MessageEnvelope
+        {
+            Version = 1,
+            MessageType = MessageType.KeyExchange,
+            SenderId = signer.NodeId.ToByteArray(),
+            // 与生产 KeyExchangeHandler.SendResponseAsync 保持一致：信封 MessageId 取自载荷，
+            // 而不是信封自己的默认值。两者不等会让「重放防护按哪个键去重」这件事在测试里失真。
+            MessageId = id,
+            SenderPublicKey = signer.PublicKey,
+            Payload = Wire.Serialize<Message>(payload)
+        };
+
+        // 用生产代码同一份签名实现，避免测试里出现第二套签名规则。
+        return MessageRouter.SerializeEnvelope(MessageRouter.SignEnvelope(unsigned, signer, Signer));
+    }
+
+    /// <summary>
+    /// <see cref="Create"/> 用的签名服务，<b>固定为真实的 <see cref="AesGcmEncryptionService"/>，
+    /// 用例无法传入替身</b>。
+    /// <para>
+    /// 与 <see cref="TestRouters"/> / <see cref="TestReplayGuards"/> 同一条纪律：只注入真实实现。
+    /// 若改成接收 <c>IEncryptionService</c> 形参，调用方手上的可能是装饰器
+    /// （<c>ChatServiceTests</c> 里就握着一个 <c>TruncatingEncryptionService</c>），
+    /// 「正向帧其实是替身签的」就会成为一次击键就能犯的错 ——
+    /// 那等于把本工厂变成一个「永远放行」的假实现。
+    /// </para>
+    /// </summary>
+    private static IEncryptionService Signer { get; } =
+        new AesGcmEncryptionService(NullLogger<AesGcmEncryptionService>.Instance);
 }
 
 /// <summary>

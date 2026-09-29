@@ -34,7 +34,8 @@ public class ChatServiceTests
         IEncryptionService Crypto,
         KeyPair Identity,
         NodeInfo Local,
-        NodeInfo Peer);
+        NodeInfo Peer,
+        KeyPair PeerIdentity);
 
     /// <param name="peerDiscoverable">对端是否已在 DHT 中登记；false 模拟"目标节点未找到"。</param>
     private static Harness Build(bool peerDiscoverable = true)
@@ -49,14 +50,18 @@ public class ChatServiceTests
             EndPoint = new IPEndPoint(IPAddress.Loopback, 45001),
             PublicKey = identity.PublicKey
         };
-        var peer = TestNodes.LegacyPublicKeyNode(port: 45002);
+        // 对端必须是**真实密钥对**：ChatService 的密钥交换应答读取路径现在会验签，
+        // 并要求签名者就是它预期联系的对端（见 KeyExchangeResponseVerificationTests）。
+        // 用无对应私钥的占位公钥（LegacyPublicKeyNode）连一条正常应答都造不出来。
+        var peerIdentity = crypto.GenerateKeyPair();
+        var peer = TestNodes.RealKeyPairNode(peerIdentity, 45002);
 
         var dht = new StubDhtService(local);
         if (peerDiscoverable) dht.Register(peer);
         var router = new RecordingMessageRouter();
-        var service = new ChatService(dht, router, crypto, keyStore, NullLogger<ChatService>.Instance);
+        var service = new ChatService(dht, router, crypto, keyStore, TestReplayGuards.Create(), NullLogger<ChatService>.Instance);
 
-        return new Harness(service, router, dht, keyStore, crypto, identity, local, peer);
+        return new Harness(service, router, dht, keyStore, crypto, identity, local, peer, peerIdentity);
     }
 
     /// <summary>取出唯一一条发往对端的私聊 TextMessage。</summary>
@@ -244,7 +249,7 @@ public class ChatServiceTests
         };
         transport.ConnectionFactory = _ => link;
 
-        var service = new ChatService(dht, router, crypto, localKs, NullLogger<ChatService>.Instance);
+        var service = new ChatService(dht, router, crypto, localKs, TestReplayGuards.Create(), NullLogger<ChatService>.Instance);
 
         await service.SendPrivateMessageAsync(peer.NodeId, "首次通信");
 
@@ -286,20 +291,14 @@ public class ChatServiceTests
             Payload = Wire.Serialize<Message>(aheadText)
         }));
 
-        // 2) 再排入真正的密钥交换响应
-        var responderEphemeral = h.Crypto.GenerateKeyPair();
-        link.Enqueue(MessageRouter.SerializeEnvelope(new MessageEnvelope
+        // 2) 应答**不能预置**：它必须回显本次请求的一次性关联标识，而该标识此刻还没生成。
+        //    故惰性构造 —— 回调触发时请求已在路由器里记录下来了。
+        link.OnReceiveWhenEmpty = () =>
         {
-            MessageType = MessageType.KeyExchange,
-            SenderId = h.Peer.NodeId.ToByteArray(),
-            Payload = Wire.Serialize<Message>(new KeyExchangeMessage
-            {
-                SenderId = h.Peer.NodeId.ToByteArray(),
-                ConversationId = h.Peer.NodeId.ToHexString(),
-                EphemeralPublicKey = responderEphemeral.PublicKey,
-                IsResponse = true
-            })
-        }));
+            var request = (KeyExchangeMessage)h.Router.SentViaConnection.Single().Message;
+            return KeyExchangeResponseFrames.Create(
+                h.PeerIdentity, h.Crypto.GenerateKeyPair().PublicKey, request.ConversationId);
+        };
 
         await h.Service.SendPrivateMessageAsync(h.Peer.NodeId, "握手后正式消息");
 
@@ -325,27 +324,25 @@ public class ChatServiceTests
             EndPoint = new IPEndPoint(IPAddress.Loopback, 45021),
             PublicKey = identity.PublicKey
         };
-        var peer = TestNodes.LegacyPublicKeyNode(port: 45022);
+        var peerIdentity = real.GenerateKeyPair();
+        var peer = TestNodes.RealKeyPairNode(peerIdentity, 45022);
         var dht = new StubDhtService(local).Register(peer);
         var router = new RecordingMessageRouter();
 
         var link = new FakeTcpConnection(peer.EndPoint);
         router.Connection = link;
-        link.Enqueue(MessageRouter.SerializeEnvelope(new MessageEnvelope
+        // 应答必须回显本次请求的一次性关联标识，只能惰性构造（见上一条用例的同款理由）。
+        link.OnReceiveWhenEmpty = () =>
         {
-            MessageType = MessageType.KeyExchange,
-            SenderId = peer.NodeId.ToByteArray(),
-            Payload = Wire.Serialize<Message>(new KeyExchangeMessage
-            {
-                SenderId = peer.NodeId.ToByteArray(),
-                ConversationId = peer.NodeId.ToHexString(),
-                EphemeralPublicKey = real.GenerateKeyPair().PublicKey,
-                IsResponse = true
-            })
-        }));
+            var request = (KeyExchangeMessage)router.SentViaConnection.Single().Message;
+            return KeyExchangeResponseFrames.Create(
+                peerIdentity, real.GenerateKeyPair().PublicKey, request.ConversationId);
+        };
 
-        var service = new ChatService(dht, router, crypto, keyStore, NullLogger<ChatService>.Instance);
+        var service = new ChatService(dht, router, crypto, keyStore, TestReplayGuards.Create(), NullLogger<ChatService>.Instance);
 
+        // 本用例要验证的是「会话密钥长度不合法」这一个分支。密钥交换阶段必须**正常通过**，
+        // 否则异常会提前从密钥交换抛出，测到的就不是目标分支了。
         var ex = await Should.ThrowAsync<InvalidOperationException>(
             () => service.SendPrivateMessageAsync(peer.NodeId, "不该发出去"));
         ex.Message.ShouldContain("会话密钥");

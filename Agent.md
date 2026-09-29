@@ -143,7 +143,7 @@
 > ⚠️ 实测注意：`MainlineDhtService` 另有**公开属性 `AnnouncedNodeCount`**（累计成功宣告数），但**没有**覆写接口的 `AnnouncedPeerCount`；通过 `IDhtService` 引用读到的是默认值 `0`（`P2PChatTui` 自检输出即走接口）。写断言请以具体类型为准。
 > `AnnounceNowAsync()`（立即触发一次宣告）只在 `MainlineDhtService` 上，**不在接口上**，测试需先向下转型。
 
-#### `Models/`（20 个）
+#### `Models/`（21 个）
 
 **`Message`（抽象基类，多态根）** — `[MessagePackObject]` + 8 个 `[Union]`：
 
@@ -162,7 +162,10 @@
 
 > ⚠️ **`MessageId` / `Timestamp` 必须用 `set` 而非 `init`**：MsgPack 0.17 生成的反序列化在 `init` 属性 + 初始化器下会无条件重置为 `default`，`set` 访问器才能让 formatter 仅在键存在时赋值。
 
-其他模型：`MessageEnvelope`、`NodeId`、`NodeInfo`、`Contact`、`GroupInfo`、`ChatMessageEvent`、`ContactStatusEvent`、`ConversationSummary`、`FileTransferProgress`、`PeerDiscoveryEventArgs`。
+其他模型：`MessageEnvelope`、`NodeId`、`NodeInfo`、`Contact`、`GroupInfo`、`ChatMessageEvent`、`ContactStatusEvent`、`ConversationSummary`、`FileTransferProgress`、`PeerDiscoveryEventArgs`、`ConversationId`。
+
+> 🆕 **`KeyExchangeRejectedException`（`Core/Models/`，本轮新增）** —— 密钥交换**应答**未通过校验时抛。它与 `P2PChatTui` 内部的 `HelloRejectedException` 是同一类事件但**故意不复用**：后者作用域限于 `/connect` 那一条命令，本类型走的是 `SendPrivateMessageAsync` 主链路，且**抛它就意味着消息没发出去** —— 两者失败时用户心智不同（「连不上」vs「消息没发出去」），UI 需要分开措辞。
+> 📏 **语义约定（源码里写死的）**：抛出本异常时**会话密钥一定没有被写入、明文一定没有上线**。任何在写会话密钥**之后**才发生的失败**不得**用本类型 —— 那会让 UI 误以为可以安全重试。
 
 **`NodeId`**（`readonly record struct`，20 字节 / 160 bit）
 - `FromPublicKey(byte[])` — SHA-1 派生
@@ -243,9 +246,22 @@
 
 
 > 🔑 **为什么又要收敛一次（与 `EnvelopeCodec` 同构）**：「信封怎么解析」和「信封怎么验签」在本项目里**各自被复制过多份**。编解码那份已在阶段 3.2 收敛；**验签那份当时漏了 `P2PChatTui.ReadHelloResponseAsync`** —— 它只 `Deserialize` 就取载荷，导致 `/connect <ip:port>` 对**任何抢在真节点前应答的主机**无条件信任并登记为静态对端。UI 层不引用 Chat 层、引用不到 `MessageRouter.VerifyEnvelope`，所以正解是像编解码一样把验签收敛到 Core 的依赖图根，**绝不在 UI 里再抄一份**。
-> `MessageRouter.VerifyEnvelope` / `VerifyEnvelopeCore` 现在都是**薄委托**，且**刻意保留既有 public static API** —— `MessageSigningTests` 有多处直接调用，改签名会炸红它们。
+> `MessageRouter.VerifyEnvelope` 现在是**薄委托**，且**刻意保留既有 public static API** —— 6 个测试文件里有 20 余处直接调用它，改签名会炸红它们。
+> ⚠️ **同名但不同物：`VerifyEnvelopeCore` 已降为 `private static` 且全仓库零调用者**（死代码），`MessageSigningTests` 调的是**公开的 `VerifyEnvelope`**。文档、注释、乃至本节都**不要再拿 `VerifyEnvelopeCore` 当权威来源**。
 >
 > ⚠️ **验签只属于「密码学」层。重放判定不在这里** —— 见 `IReplayGuard`（§7）。两者是有状态/无状态之分，见 §3.4。
+>
+> 🔴 **这一族有三处，不止已报出的两处**（`HANDOFF.md` §8 第 5 条：「这不是两个孤立的 bug，是**一类**。建议按家族排查，不要只补已报出的点」）：
+>
+> | 路径 | 曾经的形状 | 状态 |
+> |---|---|---|
+> | `P2PChatTui.ReadHelloResponseAsync`（`/connect`） | 抄了编解码，**没抄验签** —— 只 `Deserialize` 就取载荷 | ✅ `3c48f95`，收敛到本文件 |
+> | `ChatService.ReadKeyExchangeResponseAsync`（自动密钥交换应答） | 只抄编解码，**没抄任何校验** —— 四道判据一道都没有 | ✅ 已补齐，见 §3.4 |
+> | `GroupChatService.ReadPeerPublicKeyFromResponseAsync` | **本来就是对的** —— 验签 + 核对预期对端 | ✅ 从未改过 |
+>
+> 第三行是这张表存在的理由：**正确范式早就在仓库里，只是没有统一施加。** 所以凡是新增「读线上信封」的路径，先去找同族里已经写对的那一份，**不要**重新想一遍。
+> ⚠️ 注意第二行的形状与第一行不同：不是「抄漏了」，是**引用不到、索性没写**。两种形状都归同一条纪律 —— 收敛到 `Core` 后，从结构上让「抄一份」不再可能。
+> ⚠️ **反过来也别把第三行读成「它已完备」**：它答了「验签了吗」和「是不是预期对端」，但**没有**过 `IReplayGuard`，且它的 `ConversationId` 仍是**恒定值**（`GroupChatService.cs` 的 `ProbeMemberPublicKeyAsync` 里就是 `memberNodeId.ToHexString()`）。按 §3.4 推论一，**回显校验在那个位置本身是必要且正确的**（分界线是**该值是否每次重新随机**，不是「哪条路径」）—— **缺的是把该值改成一次性随机，而不是「那里不需要回显校验」**。别把「在恒定值上做等于没做」误读成「那处不该做」。**三问要分别答**：这条路径答了「验签」与「身份从公钥派生」，**缺的是「新鲜度」**；而「公钥↔身份绑定可信」这句话本身**只覆盖第二问**。**该缺口仍敞开，定档为硬化项**（经复核未发现可利用后果），见 §8.2。
 
 ---
 
@@ -446,7 +462,8 @@ private readonly ConcurrentDictionary<Guid, TaskCompletionSource<Message>> _pend
 | **`CheckReplay(envelope, out failureReason)`** | **入站重放准入**，与验签并列但**不是第五道验签关卡** —— 见下方专节 |
 | `static SerializeEnvelope` / `DeserializeEnvelope` | **薄委托** `Core.Extensions.EnvelopeCodec`（详见 §3.1 末尾） |
 
-> ⚠️ **`VerifyEnvelope` / `VerifyEnvelopeCore` 的签名是刻意不动的公开契约** —— `MessageSigningTests` 有多处**直接调用**它们。改签名、改可见性或删任一个都会炸红一批语义正确的测试。新增能力请加到 `EnvelopeVerifier`，**不要**在 `MessageRouter` 上另起一份实现。
+> ⚠️ **`VerifyEnvelope` 的签名是刻意不动的公开契约** —— 6 个测试文件里有 20 余处**直接调用**它（`MessageSigningTests` / `MessageRouterTests` / `EnvelopeVerifierTests` / `ChatServiceTests` / `MessageHandlerTests` / `KeyExchangeIdentityTests` / `ReplayProtectionTests`）。改签名、改可见性或删掉它都会炸红一批语义正确的测试。新增能力请加到 `EnvelopeVerifier`，**不要**在 `MessageRouter` 上另起一份实现。
+> 🚨 **看到 `VerifyEnvelopeCore` 先确认可见性** —— 它是 `private static` 薄委托、**零调用者**（死代码残留），与上面那个公开契约**只是同名**。`HelloResponseVerificationTests` 另有一条守卫**禁止 TUI 再提及这个名字**（那段注释正是本节末尾记录的事故源）。把死代码当契约引用，是 §8.1 第 13 条那种「指向了一处并不存在的调用点」的温和版本。
 
 **第一道关卡：入站验签（`EnvelopeVerifier.Verify`，纯密码学，任一不过即丢弃 + Warning）**：
 
@@ -455,7 +472,7 @@ private readonly ConcurrentDictionary<Guid, TaskCompletionSource<Message>> _pend
 3. `NodeId.FromPublicKey(SenderPublicKey) != SenderId` → 「SenderId 与 SenderPublicKey 不匹配」（**防 `SenderId` 冒名**）
 4. `encryption.Verify(...)` 失败 → 「ECDSA 验签失败」
 
-> `VerifyEnvelope` / `VerifyEnvelopeCore` 是 **`static` 的纯函数**，被 `MessageSigningTests` 大量直接调用。**不要**往里面塞任何策略或状态 —— 那会污染语义并连带炸红一批正确的测试。**重放判定也不在这里**（见下一节）。
+> `VerifyEnvelope` 是 **`static` 的纯函数**，被测试大量直接调用。**不要**往里面塞任何策略或状态 —— 那会污染语义并连带炸红一批正确的测试。**重放判定也不在这里**（见下一节）。
 
 #### ⚠️ 第二道关卡：入站重放防护（`CheckReplay`）—— **不要当成第五道验签关卡**
 
@@ -500,20 +517,56 @@ private readonly ConcurrentDictionary<Guid, TaskCompletionSource<Message>> _pend
 | `GroupInviteHandler` | `GroupInvite` | 解密 `EncryptedGroupKey` → 写入 keyStore → 调 `GroupChatService.HandleInviteAsync` |
 | `GroupNotifyHandler` | `GroupNotify` | 调 `GroupChatService.HandleNotifyAsync` |
 
-#### `Services/ChatService.cs`（约 216 行）
+#### `Services/ChatService.cs`（约 329 行）
 **同时**实现 `IChatService` 与 **`IChatEventPublisher`**，并**独占**全进程那一条 `Channel<ChatMessageEvent>`。
+构造函数第 5 个形参是 **`IReplayGuard` —— 必填、无默认值**，构造函数体里 `?? throw new ArgumentNullException`（与 `MessageRouter` 同一纪律，理由见下方小节）。
 
 | 方法 | 说明 |
 |---|---|
 | `SendPrivateMessageAsync(recipientId, text, ct)` | `FindNodeAsync` 定位（未命中抛 `InvalidOperationException`）→ `EnsureSessionKeyAsync` → 校验 `sessionKey.Length == 32` → AES-GCM 加密 → Base64 存 `TextMessage.Content` → 本地推 `ChatMessageEvent(IsOutgoing=true)` |
 | **`PublishAsync(chatEvent, ct)`** | **`IChatEventPublisher` 的唯一实现点**，也是入站消息抵达 UI 的**唯一**路径（见 §2.3 铁律） |
-| `PerformKeyExchangeAsync(recipient, identity, ct)` | 发 `KeyExchangeMessage`（临时公钥）→ `ReadKeyExchangeResponseAsync` **在同一连接上读响应** |
+| `PerformKeyExchangeAsync(recipient, identity, ct)` | 发 `KeyExchangeMessage`（临时公钥），`ConversationId` 填**本次新生成的一次性** `kx-{Guid:N}` → `ReadKeyExchangeResponseAsync` **在同一连接上读响应**，四道判据全过才派生并写入会话密钥 |
 | `EnsureSessionKeyAsync(...)` | 每对端一把 `SemaphoreSlim`，避免并发重复密钥交换 |
-| `ReadKeyExchangeResponseAsync(...)` | 非响应类型消息**交回 `MessageRouter`** 继续路由，不丢弃。⚠️ 它**不经过 `RouteIncomingAsync`**，因此**不经过验签与重放防护** —— 详见 §8.2 残余风险 |
+| `ReadKeyExchangeResponseAsync(...)` | 非响应类型消息**交回 `MessageRouter`** 继续路由，不丢弃。⚠️ 它**走不到 `RouteIncomingAsync`**，所以**自己**答全**四道判据**（回显 / 验签 / 预期对端 / 重放）—— 详见下方小节 |
 | `HasSessionKey(peerId)` | 查询 keyStore |
 | `OnMessageReceived` | 那条**唯一**通道的 `ReadAllAsync()` |
 
 > ⚠️ **`ConversationId` 必须是方向无关的**：`ConversationId.ForPrivate(identity.NodeId, recipientId)` 把本机与对端两个 ID 拼接。历史缺陷曾写成 `recipientId`，导致接收端的消息落进一个 UI 永远选不中的会话桶。UI 侧 `PrivateConversationKey` 必须调用**同一个**函数。
+> ⚠️ 这条只约束**消息的** `ConversationId`。**握手请求**的 `ConversationId` 是另一回事 —— 它必须是**一次性**的，否则回显校验形同虚设，见下。
+
+##### ⚠️ 自动密钥交换的应答读取路径 —— 「四道判据一道都没有」
+
+> 📏 **先统一口径（本节出现三个名字，关系如下）**：**「三问」**（§8.1 第 18 条）是**任何**「把线上信封转成可使用对象」的路径的通用底线 —— 验签了吗 / 身份从公钥派生还是取自载荷 / 新鲜度由谁保证。**「四道判据」**（下文）是三问在**握手响应**这一具体路径上的展开，**多出的第 ① 条回显校验是这类路径特有的**（它要挡的是「录一条旧应答重放给另一个受害者」，正常消息路由不需要）。标题里的「一道都没有」说的是**历史状态**。
+
+> 🔴 **这一条单独拎出来，因为它记录的是本项目最贵的一类失误：防护缺失时，程序不会以任何可见方式失败。**
+
+`ReadKeyExchangeResponseAsync` 读的是**本进程主动发起**的握手应答，直接消费那条出站连接上的字节流。`MessageRouter.RouteIncomingAsync` 的验签与重放防护**只覆盖真正流经它的信封** —— 这条路径走不到那里，于是那道门对它**完全不存在**，而不是「覆盖得弱一些」。
+
+**历史形状（已修）**：只 `Deserialize` 就取 `response.EphemeralPublicKey` 派生会话密钥，**全程零校验**。三处后果，全部静默：
+
+| 后果 | 说明 |
+|---|---|
+| **会话密钥被单方面决定** | 应答方给出**任意**临时公钥，路的攻击者给出自己的 → 该会话后续**全部私聊**对其可解密。而密钥被记在**用户以为的那个对端**名下 —— 界面正常、日志一行都没有 |
+| **应答方身份从未核对** | 响应来自哪个节点都没查过，「我在和 A 说话」这个前提从未成立 |
+| **重放防护不覆盖** | 与消息通道「两套强度」不一致 |
+
+> ⚠️ **这条路径是主功能必经的，不是边角**：用户首次 `/msg` 发给一个**尚无会话密钥**的对端就走这里 —— 即 DHT 自动发现或 `/add` 得到的对端，**不是**刚用 `/connect` 亲手连上的。因此判据强度必须与 `/connect` 那条**一致**，不能因为「对端是系统自己找的」就当作可信。
+
+**四道判据（顺序固定，全部在写入会话密钥之前完成）**：
+
+1. **回显本次的一次性关联标识** —— 挡「录下一条旧的合法应答重放给另一个受害者」。正常对端必原样回显（`KeyExchangeHandler` 构造响应时本就回传），故无误杀。
+2. **`Core.Extensions.EnvelopeVerifier.Verify` 验签** —— 唯一实现是收敛到 Core 的那一份，**绝不在本文件再抄一份**解析/验签。
+3. **签名者必须就是预期对端** —— 身份**从公钥派生**（`NodeId.FromPublicKey(envelope.SenderPublicKey!)`），**绝不**比较载荷里的 `SenderId`，那是对端完全可控的输入。
+4. **`IReplayGuard.TryAccept`** —— 与消息通道同强度，消除两套强度的不一致。
+
+任一不过 → 抛 `KeyExchangeRejectedException` 并记 **`LogError`**（不是 Debug：这是安全事件）。**绝不静默回退**到「不校验也接受」。
+
+> 💡 **判据 ③ 是本路径强于 `/connect` 的地方，别把两者混为一谈**：`/connect` 连的是**未知端点**，只能 TOFU + 端点连续性；而这里 `expectedPeerId` 来自 `FindNodeAsync` / 联系人，是**已知的预期身份**，所以**能**直接拒掉「应答方不是我要找的那个节点」。
+> 📏 **它不保证什么**：不保证对端机器没被攻陷，也不保护 `FindNodeAsync` 返回的**端点**是否被指向了错误主机 —— 那是发现层的信任问题。用户提示不得把它表述成「已验证对端可信」（§8.1 第 16 条）。
+
+> 🧨 **推论：恒定的关联标识会让「回显校验」变成装饰。** 判据 ① 此前的取值是恒定的 `recipient.NodeId.ToHexString()` —— 回显它**对每个受害者都一样**，攻击者录下的旧应答天然对得上，校验形同通过。**回显只有在该值每次交换重新随机时才具备挡重放的能力**（反过来说，正常消息路由的 `ConversationId` 本来就是恒定的会话键，那边由 `MessageId` 去重覆盖、不需要回显校验）。⚠️ §3.6 曾据旧值写下「不要给 `PerformKeyExchangeAsync` 加回显校验」，**该结论已随本次改动作废** —— 分界线是**该值是否每次重新随机**，不是「哪条路径」。
+
+> 🧪 **守回归**：`tests/P2PChat.Chat.Tests/KeyExchangeResponseVerificationTests.cs` —— **行为测试**（`ChatService` 可在进程内真实构造，走真实密码学 + 真实重放防护，断言「消息到底发没发出去、会话密钥到底写没写」），末尾另有**结构守卫**防「把校验整段删掉」。它与 `HelloResponseVerificationTests` 的分工、断言强度约定写在那个文件的类注释里，改前先读。
 
 #### `Services/GroupChatService.cs`（约 550 行）
 `IGroupChatService` 实现。构造时注入 `IGroupMetadataStore`（阶段 3.3）。
@@ -683,8 +736,8 @@ private readonly ConcurrentDictionary<Guid, TaskCompletionSource<Message>> _pend
 > 绝不能把验签下移到「登记静态对端之后」或任何其它使用点之后 —— `PublicKey = peerPublicKey` 正是路由表/静态对端层做 `NodeId.FromPublicKey(node.PublicKey)` 防冒名判定的依据；**一条未验签的公钥能让那一层守卫直接失效（不是变弱，是被绕过）**。
 > 身份同理**必须从公钥派生**，绝不能用 `new NodeId(response.SenderId)` —— 载荷里的 `SenderId` 是对端可控输入。
 
-> ℹ️ **判据 ① 为什么只有 `/connect` 需要**：hello 的 `ConversationId` 是每次调用新生成的**一次性关联标识**；而正常消息路由的 `ConversationId` 是**恒定的会话键**，回显它不提供任何额外保证（那边由 `MessageId` 去重覆盖）。
-> ⚠️ **不要**去 `ChatService.PerformKeyExchangeAsync` 加同样的回显校验 —— 那只会制造一种「已完备」的错觉。
+> ℹ️ **判据 ① 为什么「正常消息路由」不需要**：那条路的 `ConversationId` 是**恒定的会话键**，回显它不提供任何额外保证（那边由 `MessageId` 去重覆盖）。
+> ⚠️ **已订正（勿再照旧结论行事）**：这里曾写着「**不要**去 `ChatService.PerformKeyExchangeAsync` 加同样的回显校验」。那条结论的前提是**它的关联标识是恒定的**（当时为 `recipient.NodeId.ToHexString()`）—— 在恒定值上做回显校验确实只是制造「已完备」的错觉。该值现已改为**每次交换新生成的一次性** `kx-{Guid:N}`，于是**同样的回显校验在那边也成立、且必要**，已纳入四道判据。判据 ① 的真正分界线不是「哪条路径」，而是**该值是否每次重新随机**。详见 §3.4。
 
 > 🧪 **守回归的两组测试（改这个文件前先看它们）**：
 > - **`tests/P2PChat.Integration.Tests/HelloResponseVerificationTests.cs`** —— 8 条**结构守卫**（读源码断言结构，不是行为断言）。它们专门钉死本条最容易复发的东西：TUI 必须调 `EnvelopeVerifier.Verify`；**TUI 不得自行实现信封解析或验签**；身份必须从**公钥**派生而非载荷里的 `SenderId`；**TUI 不得再声称 `VerifyEnvelopeCore` 替它守过身份绑定**（即那条假注释不得复活）；必须校验关联标识回显；必须按端点身份裁决分流且冲突时默认拒绝；首次接触提示必须写明「未经带外验证」且**不得声称「已验证」**。
@@ -1072,7 +1125,8 @@ Version(1B) || MessageType(1B) || Seq(4B BE) || SenderId(20B) || MessageId(16B)
 ```
 
 > 💡 换句话说：**签名覆盖除「签名自身」以外的全部信封内容**，包括 `SenderId`、`SenderPublicKey`、`MessageId`、`Timestamp` 与 `Payload`。长度前缀本身也在待签范围内。
-> 验证顺序见 `MessageRouter.VerifyEnvelopeCore`：缺签名 → 缺公钥 → `SenderId != SHA1(SenderPublicKey)` → ECDSA 验签。任一不过即在 `RouteIncomingAsync` 入口丢弃并打 Warning。
+> 验证顺序见 **`Core.Extensions.EnvelopeVerifier.Verify`（唯一实现处）**：缺签名 → 缺公钥 → `SenderId != SHA1(SenderPublicKey)` → ECDSA 验签。任一不过即在 `RouteIncomingAsync` 入口丢弃并打 Warning。
+> ⚠️ `MessageRouter.VerifyEnvelope` 只是它的公开薄委托。**`MessageRouter.VerifyEnvelopeCore` 是 `private` 且零调用者的同名死代码，不是权威来源** —— 本行曾指向它，属「引用了看似权威实则已过期的东西」的实例。
 > **收发的唯一实现是 `Core/Extensions/EnvelopeCodec.cs`**（见 §3.1 末尾）—— 不要在任何其他文件里重写这套切分逻辑。
 
 > ⚠️ **与旧版的兼容性是破坏性的**：无 `SenderPublicKey` / `Signature` 的旧版信封一律被拒。升级任一端即等于要求两端同时升级。
@@ -1244,13 +1298,16 @@ AES-256-GCM(wrappingKey) → 32B 密文主体 + 12B nonce + 16B tag
 8. **改线路格式只能改 `Core/Extensions/EnvelopeCodec.cs`** —— `MessageRouter.SerializeEnvelope` / `DeserializeEnvelope` 只是薄委托，`P2PChatTui.ReadHelloResponseAsync` 也调它。**任何地方都不要再写第二份切分逻辑**（已经因此坏过 `/connect`）。另外 `KeyExchangeHandler` 手工构造信封，必须走 `MessageRouter.SignEnvelope` 以保证签名规则唯一。
 9. **新增出站路径必须签名** —— 任何绕过 `MessageRouter.SendViaConnectionAsync` 直接发信标的代码，产出的信封都会被对端在入口拒绝。
 10. **`CheckReplay` 是独立关卡，不要合并进 `VerifyEnvelope`，也不要当成冗余删掉** —— 前者验密码学（无状态），后者管准入（**有状态**）。删掉 `CheckReplay` 不会让任何密码学测试变红，所以它需要被显式写在文档里保护。详见 §3.4 / §7。
-11. **`IReplayGuard` 在 `MessageRouter` 构造函数里是必填形参** —— **不要**改成 `IReplayGuard? replayGuard = null`。可选参数会让「忘记注入」静默等于「关闭防护」，是安全陷阱。
+11. **`IReplayGuard` 在 `MessageRouter` 与 `ChatService` 的构造函数里都是必填形参** —— 两处都**不要**改成 `IReplayGuard? replayGuard = null`，都要在构造函数体里 `?? throw new ArgumentNullException`。可选参数会让「忘记注入」静默等于「关闭防护」，是安全陷阱。（`ChatService` 需要它是因为它的密钥交换应答读取路径走不到 `RouteIncomingAsync`；`MessageRouter` 需要它是因为入站消息通道。）
 12. **不要在文档里引用未核实的行号** —— `DEFECTS.md` / `HANDOFF.md` 里的行号是缺陷发现时的快照，早已漂移。写文档前先 `grep` 源码。
 13. 🔴 **代码注释里的「已保证 / 已强制 / 可信」必须能指到一处可验证的调用点** —— 指不到的，宁可写「⚠️ 此处**未**验签」。`P2PChatTui.ReadHelloResponseAsync` 曾用注释断言「`VerifyEnvelopeCore` 已强制公钥↔身份绑定可信」，而那条路径**从没调用过该函数**。**缺注释只是让人知道「这里没做」；假注释让人主动放弃检查**，危害大得多。详见 §3.6。
 14. 🔒 **`Channel<ChatMessageEvent>` 全进程只允许存在一条** —— 由 `ChatService` 持有。所有组件经 `IChatEventPublisher.PublishAsync` 投递，**不得自建通道**。看到第二个就是 REPAIR-PLAN B3 复发（能看到自己发的、永远看不到别人发的）。详见 §2.3。`ChatEventDeliveryTests` 有**结构守卫**（扫源码断言「整个 Chat 项目里聊天事件通道只能由 `ChatService` 声明」）和一条**负向对照**（发布器接错时 handler 层全绿但 UI 流上什么都没有）—— 改 handler 时别让它们红。
 15. 🚨 **改 DI 之后必须实际跑一次进程** —— `dotnet build` 全绿、单测全绿**都抓不到 DI 缺陷**。漏注册则启动即崩；同一服务注册成两个实例则不崩但功能静默失效。改 `Program.cs` 时注意它**内联复制**了 Chat 层注册、**从不调用** `AddP2PChatChat()`。详见 §5.2 门禁、§3.7 顺序约束。
-15. **验签 ≠ 身份可信** —— 验签只证明「出自持该私钥的一方」。首次接触未知端点（`/connect`）是 **TOFU**，攻击者用自己的私钥签的信封密码学上完全有效。**不要**在任何用户提示或文档里宣称「验签通过 = 对方可信」。源码里已有守卫测试盯着这条（`HelloResponseVerificationTests`）。详见 §3.6 / §8.2。
-16. **`EvaluatePeerIdentity` 不得 early-return** —— 必须扫完全部绑定，**冲突优先于匹配**。同一端点既有匹配又有不匹配说明本地绑定已损坏，「有一条能对上」不足以放行。
+16. **验签 ≠ 身份可信** —— 验签只证明「出自持该私钥的一方」。首次接触未知端点（`/connect`）是 **TOFU**，攻击者用自己的私钥签的信封密码学上完全有效。**不要**在任何用户提示或文档里宣称「验签通过 = 对方可信」。源码里已有守卫测试盯着这条（`HelloResponseVerificationTests`）。详见 §3.6 / §8.2。
+17. **`EvaluatePeerIdentity` 不得 early-return** —— 必须扫完全部绑定，**冲突优先于匹配**。同一端点既有匹配又有不匹配说明本地绑定已损坏，「有一条能对上」不足以放行。
+18. 🔴 **每一条「把线上信封转成可使用对象」的路径，都必须自己回答三个问题：验签了吗？身份是从公钥派生的还是取自载荷的？新鲜度由谁保证？** —— `MessageRouter.RouteIncomingAsync` **只覆盖真正流经它的信封**；任何直接消费连接字节流的路径（`P2PChatTui.ReadHelloResponseAsync`、`ChatService.ReadKeyExchangeResponseAsync`）**一样都拿不到**，而且缺防护时**不会以任何可见方式失败** —— 会话照发、界面正常、日志一行都没有。因此**不能因为「它不经过路由器」而豁免**。身份**一律从公钥派生**，绝不取载荷里的 `SenderId`。详见 §3.4 / §3.6。
+    - 🧨 **推论一：恒定的关联标识会让「回显校验」变成装饰。** 回显只有在该值**每次交换重新随机**时才挡得住重放；用恒定值（如对端 `NodeId`）时，攻击者录下的旧应答天然对得上。
+    - 📏 **推论二：按影响上界定严重度，不要因攻击前提更苛刻而打折。** 同族上一处修复（`3c48f95`）曾把这条残余写成「低一档但非零」，理由是它缺少「主动连陌生主机」这个放大器 —— **这个判断过于宽松**：影响上界完全相同（该会话机密性全失），且它正处在 DHT 自动发现这条主功能实际走的路径上。
 
 ### 8.2 已知的宽松/待完善点
 
@@ -1272,7 +1329,8 @@ AES-256-GCM(wrappingKey) → 32B 密文主体 + 12B nonce + 16B tag
 | **`/connect` 首次接触是 TOFU** | 三道判据（回显 / 验签 / 端点→身份连续性）**都不等价于「我知道你在跟谁说话」**。首次接触未知端点时，攻击者用自己的私钥签的信封在密码学上**完全有效**，无法与合法节点区分 —— 此时只能信任并**如实告知用户**。连续性靠 `EnvelopeVerifier.EvaluatePeerIdentity`（同一端点前后身份不一致即拒），**第二次及以后**才生效。**没有历史就没有判据** |
 | **`/add` 路径没有身份判据** | `/add <节点ID> <ip:port>` 直接 `RegisterStaticPeer`，**不经过 hello，也没有三道判据**。身份完全取决于用户填的 NodeId 是否正确 —— 这正是 `EvaluatePeerIdentity` 刻意**不读 `contacts.json`** 的原因（用户的意图 ≠ 我们亲眼验过的身份） |
 | **`--force` 是一次性豁免** | `/connect --force` 只放行**本次**的端点身份冲突判定，**不永久改写**已登记的身份。用它绕过中间人告警前请确认不是 DHCP 换 IP 造成的误报 |
-| **`ChatService.ReadKeyExchangeResponseAsync` 绕过 `RouteIncomingAsync`** | 它直接在连接上读密钥交换响应并 return，**因此既不过验签也不过重放防护**。影响较低（响应只用于本地派生会话密钥），但这是一条**不在任何关卡内**的入站路径，改动时别忘了 |
+| ~~`ChatService.ReadKeyExchangeResponseAsync` 绕过 `RouteIncomingAsync`~~ **（已修，见 §3.4）** | 这条「不在任何关卡内」的入站路径**曾经零校验**：只做反序列化就取 `response.EphemeralPublicKey` 派生会话密钥。现已在**写入会话密钥之前**补齐四道判据（回显本次一次性关联标识 / `EnvelopeVerifier.Verify` / 签名者必须是预期对端且身份从公钥派生 / `IReplayGuard.TryAccept`），失败抛 `KeyExchangeRejectedException`。⚠️ 它**仍然**走不到 `RouteIncomingAsync` —— 那是**结构事实**，不是待办项；因此该路径必须自己答全**四道判据**，**不因「它不经过路由器」而豁免** |
+| **`GroupChatService.ReadPeerPublicKeyFromResponseAsync` 的新鲜度缺口（硬化项，非可利用）** | 该路径**不过 `IReplayGuard**，且探测请求的 `ConversationId` 仍是**恒定值**（`ProbeMemberPublicKeyAsync` 里为 `memberNodeId.ToHexString()`）。<br>⚠️ **但经复核未发现可利用后果，勿按「无验签」类比估高**：其唯一输出（对端公钥）被**三重绑定**到 `expectedPeer` —— ①`EnvelopeVerifier.Verify` 强制 `NodeId.FromPublicKey(公钥) == SenderId`；②`ReadPeerPublicKeyFromResponseAsync` 核 `SenderId == 预期成员`；③`PeerPublicKeyRegistry.Record` 复核 `DerivesNodeId`。任何能通过三者的帧，携带的都是该 NodeId **当前**对应的正确公钥（`NodeId = SHA1(公钥)`，**换密钥必同时换 NodeId**，故「旧公钥被写回」不可达）。重放防护在这里买不到安全性，因为输出是自认证的。<br>⇒ 定档为**硬化 / 一致性问题**：与兄弟路径 `ChatService` 强度不一致；且**恒定 `ConversationId` 会在将来任何人给本路径补上「新鲜度」语义时静默把它废掉**（见 §3.4 推论一）。**本行不挂任何具体危害描述** —— 想加危害前请先给出可验证的链路。<br>⚠️ **作用域**：本路径对「它被交给的那个对端」是健全的，但它**不认证「那个对端是谁」** —— 若 `expectedPeer` 本身就是攻击者的 NodeId（见 §3.1 的联系人身份残余），该公钥「自洽」通过并被用于包装群密钥。详见 §3.1 家族表 |
 | **`Program.cs` 内联复制 Chat 层注册** | 从不调用 `AddP2PChatChat()`，所以扩展方法里新增的注册**对真实 App 无效**且无任何报错。详见 §3.7 顺序约束 |
 | **DI 缺陷 `dotnet build` 抓不到** | 漏注册 → 启动即崩；同一服务注册成两个实例 → 不崩但功能静默失效（B3）。build 与单测都可能全绿，**必须实际跑一次进程**。详见 §5.2 门禁 |
 | **`P2PChat.Chat.Tests`** | **不再是空壳**（曾记为「项目存在但无测试用例」）。已有 `ReplayGuardTests` / `MessageRouterTests` / `ChatServiceTests` / `ContactServiceTests` / `GroupChatServiceTests` / `MessageHandlerTests` |
@@ -1316,6 +1374,7 @@ AES-256-GCM(wrappingKey) → 32B 密文主体 + 12B nonce + 16B tag
 | **🆕** | **签名只证明来源，不证明新鲜度** | 抓包后原样重放一条合法旧信封，仍能通过全部四道验签关卡。`SequenceNumber` 写了从不校验、`Timestamp` 签了从不校验新鲜度 | 新增 `Core/Abstractions/IReplayGuard.cs` + `Chat/Routing/MessageReplayGuard.cs`：时间新鲜度窗口（1h / 未来 5min）+ 按对端分桶的 MessageId 环形去重（1024）。**作为独立的 `CheckReplay` 步骤**，在验签之后、handler 派发之前；`ReplayMaxAgeSeconds <= 0` 为逃生阀。详见 §3.4 与 §7 |
 | **B3** | **收到的消息永远不显示** | `PrivateMessageHandler` / `GroupMessageHandler` 各自持有**私有** `Channel<ChatMessageEvent>`，而 TUI 读的是 `ChatService._messageChannel`，`PublishMessageAsync` 在 `src/**` 零调用者 | 新增 `Core/Abstractions/IChatEventPublisher.cs`（单方法 `PublishAsync`）；两个 handler 改为注入它，删除各自通道与 `OnMessageReceived`；`IChatService` 与 `IChatEventPublisher` 必须解析到**同一个** `ChatService` 实例。详见 §2.3 唯一来源铁律 |
 | **🆕** | **`/connect` 的 hello 响应从未验签** | `P2PChatTui.ReadHelloResponseAsync` 只 `Deserialize` 就取载荷 → 任何抢在真节点前应答的主机都被无条件信任并登记为静态对端。**更糟的是该方法的 XML 注释谎称「`VerifyEnvelopeCore` 已强制公钥↔身份绑定可信」** | 新增 `Core/Extensions/EnvelopeVerifier.cs`（与 `EnvelopeCodec` 同构收敛到 Core），`MessageRouter` 改为薄委托但**保留 public static API**；`P2PChatTui` 引用 Core 那一份；改正误导性注释；再加 `EvaluatePeerIdentity` 做端点→身份连续性检查（TOFU）。详见 §3.6 |
+| **🆕** | **自动密钥交换的应答从未校验** | `ChatService.ReadKeyExchangeResponseAsync` 只反序列化就取 `response.EphemeralPublicKey` 派生会话密钥，**零校验** —— 应答方可单方面决定会话密钥（该会话后续全部私聊对其可解密），且密钥被记在**用户以为的那个对端**名下，界面与日志都无异常；应答方身份从未核对；该路径走不到 `RouteIncomingAsync`，故入站重放防护**不覆盖**它 | 写入会话密钥**之前**补齐四道判据：回显**本次新生成的一次性**关联标识（此前是恒定的 `recipient.NodeId.ToHexString()`，会让回显校验形同虚设）/ `EnvelopeVerifier.Verify` / 签名者必须是**预期对端**且身份从公钥派生 / `IReplayGuard.TryAccept`。失败抛 `Core/Models/KeyExchangeRejectedException` 并记 `LogError`；`ChatService` 新增**必填** `IReplayGuard` 构造形参。详见 §3.4 / §8.1 第 18 条 |
 
 ### 8.2.3 已核实无需改动
 

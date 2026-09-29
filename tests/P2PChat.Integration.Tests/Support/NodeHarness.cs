@@ -144,7 +144,9 @@ public sealed class NodeHarness : IAsyncDisposable
         // 两个消息 handler 要把解密后的事件投递进它持有的那条通道。
         // 见 REPAIR-PLAN B3 —— 此前两个 handler 各持一条私有通道，UI 读的是 ChatService 的，
         // 于是「收到」与「看到」之间没有任何连线（消息收到但界面永远空白）。
-        var chat = new ChatService(dht, capturingRouter, encryption, keyStore, NullLogger<ChatService>.Instance);
+        var chat = new ChatService(dht, capturingRouter, encryption, keyStore,
+            new MessageReplayGuard(NullLogger<MessageReplayGuard>.Instance),
+            NullLogger<ChatService>.Instance);
 
         // 注意这里传的是同一个 chat 实例，不是新建一个「只当发布器用」的对象。
         var privateHandler = new PrivateMessageHandler(

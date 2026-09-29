@@ -16,4 +16,13 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!--
+      只为 ChatService.KeyExchangeTimeout 而开：该常量是 internal 可写属性，
+      测试需要把它压到毫秒级才能在套件里覆盖「握手超时」这条分支（真等 10s 不现实）。
+      不开给 Integration.Tests —— 它不构造 ChatService。
+    -->
+    <InternalsVisibleTo Include="P2PChat.Chat.Tests" />
+  </ItemGroup>
+
 </Project>

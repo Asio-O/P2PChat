@@ -1,0 +1,36 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/implemented/bug-fix/2026-09-29-key-exchange-response-verification.md
+  zh: notes/implemented/bug-fix/2026-09-29-key-exchange-response-verification.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: The automatic key-exchange response was never verified (silent session-key substitution on the first `/msg`)"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - The class, not the instance
+      - Alternatives considered
+      - Consequences
+      - Testing
+      - Deferred
+      - Related
+    tokens: []
+  zh:
+    heading: "# Agent Note: 自动密钥交换的响应曾经完全不验签（首条 `/msg` 上的静默会话密钥替换）"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - The class, not the instance
+      - Alternatives considered
+      - Consequences
+      - Testing
+      - Deferred
+      - Related
+    tokens: []
+
+recorded: 2026-09-29
