@@ -221,7 +221,7 @@ plain 模式：stdin 读到 false (长度 29)
 > 修复 `IChatEventPublisher` 唯一事件源后，e2e 本轮 `PASS=41 / FAIL=0` 才同时覆盖了显示通路。
 
 - ✅ **Agent Note 已补**（task-6 / note-writer）：
-  [`notes/implemented/bug-fix/2026-09-28-plain-mode-stdin-input.zh.md`](notes/implemented/bug-fix/2026-09-28-plain-mode-stdin-input.zh.md) 三件套齐全。
+  [`.agents/notes/implemented/bug-fix/2026-09-28-plain-mode-stdin-input.zh.md`](.agents/notes/implemented/bug-fix/2026-09-28-plain-mode-stdin-input.zh.md) 三件套齐全。
 - ✅ **回归测试已补**（task-2 / plainmode-tester）：`tests/P2PChat.Integration.Tests/PlainModeInputTests.cs`
   测 `SubmitLine` 的分派行为（`/xxx` 命令 vs 普通文本 vs 空行）。
   设计取舍：不抽 `IPlainInputSource` 新抽象（那会改动产品代码面），只测本修复真正改动的
@@ -448,8 +448,8 @@ ECDSA 签名能证明「来自持私钥的一方」，**不能**证明「这是�
 
 **AOT 安全是本项目的核心信条**：无反射、无 `MakeGenericType`、MessagePack 用源生成 formatter、JSON 必须 `JsonContext` 源生成且 `JsonSerializerIsReflectionEnabledByDefault=false`。新增类型务必同步注册 formatter。
 
-**Agent Note 规范**（`notes/README.md`）：
-- 路径 `notes/{lifecycle}/{class}/yyyy-mm-dd-topic-title.{md,zh.md,i18n.yaml}`
+**Agent Note 规范**（`.agents/notes/README.md`）：
+- 路径 `.agents/notes/{lifecycle}/{class}/yyyy-mm-dd-topic-title.{md,zh.md,i18n.yaml}`
 - 首三行必须恰好是 `# Agent Note: <title>` / 空行 / `Status: <status>`；lifecycle 目录必须与 Status 一致
 - `## Alternatives considered` **必填**
 - `implemented/` 下**不得**出现 `## Proposal` / `## Plan` / `## Migration plan` / `## Acceptance criteria`
@@ -461,22 +461,22 @@ ECDSA 签名能证明「来自持私钥的一方」，**不能**证明「这是�
 
 | 阶段 | 主题 | 路径 |
 |---|---|---|
-| 0 | 静态对端 + 显式端点 | [`notes/implemented/feature/2026-09-20-static-peer-explicit-endpoint.zh.md`](notes/implemented/feature/2026-09-20-static-peer-explicit-endpoint.zh.md) |
-| 0 | `SenderId` 真实身份 | [`notes/implemented/bug-fix/2026-09-20-message-sender-identity.zh.md`](notes/implemented/bug-fix/2026-09-20-message-sender-identity.zh.md) |
-| 0 | 方向无关会话键 | [`notes/implemented/bug-fix/2026-09-20-direction-agnostic-conversation-key.zh.md`](notes/implemented/bug-fix/2026-09-20-direction-agnostic-conversation-key.zh.md) |
-| 1 | 公网 DHT 节点发现缺陷 | [`notes/implemented/bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md`](notes/implemented/bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md) |
-| 2 | NAT 穿透 | [`notes/implemented/bug-fix/2026-09-21-nat-traversal.zh.md`](notes/implemented/bug-fix/2026-09-21-nat-traversal.zh.md) |
-| 3.1 | 群消息加密 | [`notes/implemented/bug-fix/2026-09-21-group-message-encryption.zh.md`](notes/implemented/bug-fix/2026-09-21-group-message-encryption.zh.md) |
-| 3.2 | 消息签名 | [`notes/implemented/bug-fix/2026-09-21-message-signing.zh.md`](notes/implemented/bug-fix/2026-09-21-message-signing.zh.md) |
-| 3.3 | 群元数据持久化 | [`notes/implemented/bug-fix/2026-09-21-group-metadata-persistence.zh.md`](notes/implemented/bug-fix/2026-09-21-group-metadata-persistence.zh.md) |
-| 3.4 | 文件分块大小 | [`notes/implemented/bug-fix/2026-09-21-filetransfer-chunksize.zh.md`](notes/implemented/bug-fix/2026-09-21-filetransfer-chunksize.zh.md) |
-| 零散 | `/connect` 盲连接 | [`notes/implemented/feature/2026-09-21-blind-connect.zh.md`](notes/implemented/feature/2026-09-21-blind-connect.zh.md) |
-| 本轮 | plain 模式 stdin 输入通道 | [`notes/implemented/bug-fix/2026-09-28-plain-mode-stdin-input.zh.md`](notes/implemented/bug-fix/2026-09-28-plain-mode-stdin-input.zh.md) |
+| 0 | 静态对端 + 显式端点 | [`.agents/notes/implemented/feature/2026-09-20-static-peer-explicit-endpoint.zh.md`](.agents/notes/implemented/feature/2026-09-20-static-peer-explicit-endpoint.zh.md) |
+| 0 | `SenderId` 真实身份 | [`.agents/notes/implemented/bug-fix/2026-09-20-message-sender-identity.zh.md`](.agents/notes/implemented/bug-fix/2026-09-20-message-sender-identity.zh.md) |
+| 0 | 方向无关会话键 | [`.agents/notes/implemented/bug-fix/2026-09-20-direction-agnostic-conversation-key.zh.md`](.agents/notes/implemented/bug-fix/2026-09-20-direction-agnostic-conversation-key.zh.md) |
+| 1 | 公网 DHT 节点发现缺陷 | [`.agents/notes/implemented/bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md`](.agents/notes/implemented/bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md) |
+| 2 | NAT 穿透 | [`.agents/notes/implemented/bug-fix/2026-09-21-nat-traversal.zh.md`](.agents/notes/implemented/bug-fix/2026-09-21-nat-traversal.zh.md) |
+| 3.1 | 群消息加密 | [`.agents/notes/implemented/bug-fix/2026-09-21-group-message-encryption.zh.md`](.agents/notes/implemented/bug-fix/2026-09-21-group-message-encryption.zh.md) |
+| 3.2 | 消息签名 | [`.agents/notes/implemented/bug-fix/2026-09-21-message-signing.zh.md`](.agents/notes/implemented/bug-fix/2026-09-21-message-signing.zh.md) |
+| 3.3 | 群元数据持久化 | [`.agents/notes/implemented/bug-fix/2026-09-21-group-metadata-persistence.zh.md`](.agents/notes/implemented/bug-fix/2026-09-21-group-metadata-persistence.zh.md) |
+| 3.4 | 文件分块大小 | [`.agents/notes/implemented/bug-fix/2026-09-21-filetransfer-chunksize.zh.md`](.agents/notes/implemented/bug-fix/2026-09-21-filetransfer-chunksize.zh.md) |
+| 零散 | `/connect` 盲连接 | [`.agents/notes/implemented/feature/2026-09-21-blind-connect.zh.md`](.agents/notes/implemented/feature/2026-09-21-blind-connect.zh.md) |
+| 本轮 | plain 模式 stdin 输入通道 | [`.agents/notes/implemented/bug-fix/2026-09-28-plain-mode-stdin-input.zh.md`](.agents/notes/implemented/bug-fix/2026-09-28-plain-mode-stdin-input.zh.md) |
 
-> ✅ `notes/` 下已无 `Status: proposed` 的笔记。
+> ✅ `.agents/notes/` 下已无 `Status: proposed` 的笔记。
 > plain 模式 stdin 输入修复的 Agent Note 已由 task-6 / note-writer 补齐（原 §6 此处为「待补」）。
 > ⚠️ **task-4 若落地 `KeyExchangeMessage` 回送长期公钥这一线路变更，必须另补一篇 Agent Note**
-> （当前 task-4 的 write scope 不含 `notes/`，需要 Lead 另行指派）。
+> （当前 task-4 的 write scope 不含 `.agents/notes/`，需要 Lead 另行指派）。
 
 ---
 

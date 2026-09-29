@@ -521,7 +521,7 @@ private readonly ConcurrentDictionary<Guid, TaskCompletionSource<Message>> _pend
 - 常量：`AesGcmNonceLength=12`、`AesGcmTagLength=16`、`GroupKeyMetadataLength=28`
 - `LoadPersistedGroups()`（**构造函数里调用**）— 从 `IGroupMetadataStore.LoadAll()` 恢复群组；**仅当 keyStore 缺该群密钥时才回填**，不覆盖已有值；加载异常静默吞
 - `CreateGroupAsync(name, members, ct)` — `groupId = SHA256("{name}:{creatorNodeIdHex}:{unixMs}")` 转小写 hex（创建者必须是本节点**真实身份** `NodeId.FromPublicKey`，**不可**用 `PublicKey.Take(20)`——那是 P-256 SPKI DER 的固定头，对每个节点都一样），随机 32B 群密钥，对**每个成员独立**包装群密钥（见下），发 `GroupInviteMessage`；**落盘 `~/.p2pc/groups.json`**
-- `SendGroupMessageAsync(groupId, text, ct)` — **AES-256-GCM 加密 `Content`**（群密钥直接当 32B key）后向成员**扇出**，跳过自己（见 `notes/implemented/bug-fix/2026-09-21-group-message-encryption`）
+- `SendGroupMessageAsync(groupId, text, ct)` — **AES-256-GCM 加密 `Content`**（群密钥直接当 32B key）后向成员**扇出**，跳过自己（见 `.agents/notes/implemented/bug-fix/2026-09-21-group-message-encryption`）
 - `HandleInviteAsync(invite, ct)` — 从 keyStore 读取**已解密**的群密钥（**兼容旧版「32B 明文且无 SenderPublicKey/NonceAndTag」的本地调用**），写入 `_groups` + keyStore 并落盘
 - `HandleNotifyAsync(notify, ct)` — `dissolve` 时同步从 `_groups`/keyStore/`groups.json` 三处移除
 - `PersistGroups()` — `IGroupMetadataStore.Save(_groups.Values)`，异常只 Warning
@@ -1291,7 +1291,7 @@ AES-256-GCM(wrappingKey) → 32B 密文主体 + 12B nonce + 16B tag
 
 ### 8.2.2 已订正的缺陷（2026-09-20 / 09-21，REPAIR-PLAN 阶段 0–3）
 
-> 编号沿用 `REPAIR-PLAN.md` 的阶段编号。证据见 `notes/implemented/`。
+> 编号沿用 `REPAIR-PLAN.md` 的阶段编号。证据见 `.agents/notes/implemented/`。
 
 | 编号 | 项 | 原状 | 处置 |
 |---|---|---|---|

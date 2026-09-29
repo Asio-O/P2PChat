@@ -1,6 +1,6 @@
 # P2PChat 跨设备不可用 — 分析与修复方案
 
-> 工作文档（**不是** Agent Note）。定稿的决策请按 `notes/README.md` 转为 `proposed/` Agent Note。
+> 工作文档（**不是** Agent Note）。定稿的决策请按 `.agents/notes/README.md` 转为 `proposed/` Agent Note。
 > 分析日期：2026-09-20。依据：源码逐段通读 + 两台设备实测 + 全量测试运行结果。
 
 ## 结论摘要
@@ -33,12 +33,12 @@
 | 阶段 | 状态 | 说明 |
 |---|---|---|
 | **阶段 0** 立刻可测 | ✅ **已完成**（2026-09-20） | 见下方「阶段 0 实施记录」 |
-| **阶段 1** 让发现真的工作 | ✅ **已完成**（2026-09-20） | `announce_peer`/`get_peers` 真实闭环 + compact peer 解析 + TCP/DHT 端口语义解耦 + 引导不再「首胜即停」。见「阶段 1 实施记录」。决策：[`notes/implemented/bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md`](notes/implemented/bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md) |
-| **阶段 2** 穿透 NAT | ✅ **已完成（2.4 除外）**（2026-09-21） | UPnP IGD（裸 SSDP + SOAP，刻意不用 COM 以保 AOT）TCP/UDP 同端口映射、退出时释放租约、TUI 显式降级提示。**2.4 中继 / 打洞未做**（原标注为可选）。跨网络建连链**已闭合** —— `announce_peer` 用「UDP 包源 IP + 宣告的 TCP 端口」直接拼出公网可达的 `NodeInfo.EndPoint`，见「阶段 2.2 / 2.2b」。决策：[`notes/implemented/bug-fix/2026-09-21-nat-traversal.zh.md`](notes/implemented/bug-fix/2026-09-21-nat-traversal.zh.md) |
-| **阶段 3** 安全与完整性 | ✅ **已完成**（2026-09-21） | 3.1 群消息 AES-256-GCM 加密 / 3.2 长期 ECDSA 消息签名（含四道入口关卡）/ 3.3 群组元数据持久化 / 3.4 文件分块改用 `state.ChunkSize`。见「阶段 3 实施记录」。决策：[群消息加密](notes/implemented/bug-fix/2026-09-21-group-message-encryption.zh.md)、[消息签名](notes/implemented/bug-fix/2026-09-21-message-signing.zh.md)、[群元数据持久化](notes/implemented/bug-fix/2026-09-21-group-metadata-persistence.zh.md)、[文件分块大小](notes/implemented/bug-fix/2026-09-21-filetransfer-chunksize.zh.md) |
+| **阶段 1** 让发现真的工作 | ✅ **已完成**（2026-09-20） | `announce_peer`/`get_peers` 真实闭环 + compact peer 解析 + TCP/DHT 端口语义解耦 + 引导不再「首胜即停」。见「阶段 1 实施记录」。决策：[`.agents/notes/implemented/bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md`](.agents/notes/implemented/bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md) |
+| **阶段 2** 穿透 NAT | ✅ **已完成（2.4 除外）**（2026-09-21） | UPnP IGD（裸 SSDP + SOAP，刻意不用 COM 以保 AOT）TCP/UDP 同端口映射、退出时释放租约、TUI 显式降级提示。**2.4 中继 / 打洞未做**（原标注为可选）。跨网络建连链**已闭合** —— `announce_peer` 用「UDP 包源 IP + 宣告的 TCP 端口」直接拼出公网可达的 `NodeInfo.EndPoint`，见「阶段 2.2 / 2.2b」。决策：[`.agents/notes/implemented/bug-fix/2026-09-21-nat-traversal.zh.md`](.agents/notes/implemented/bug-fix/2026-09-21-nat-traversal.zh.md) |
+| **阶段 3** 安全与完整性 | ✅ **已完成**（2026-09-21） | 3.1 群消息 AES-256-GCM 加密 / 3.2 长期 ECDSA 消息签名（含四道入口关卡）/ 3.3 群组元数据持久化 / 3.4 文件分块改用 `state.ChunkSize`。见「阶段 3 实施记录」。决策：[群消息加密](.agents/notes/implemented/bug-fix/2026-09-21-group-message-encryption.zh.md)、[消息签名](.agents/notes/implemented/bug-fix/2026-09-21-message-signing.zh.md)、[群元数据持久化](.agents/notes/implemented/bug-fix/2026-09-21-group-metadata-persistence.zh.md)、[文件分块大小](.agents/notes/implemented/bug-fix/2026-09-21-filetransfer-chunksize.zh.md) |
 | **阶段 4.1–4.3** 测试策略（防复发部分） | ✅ **已完成** | `NodeHarness.SenderId` 已改为复用生产代码的 `KeyPair.NodeId`；新增 25 条守卫断言 |
 | **阶段 4.4–4.6** 测试策略（真实发现 / e2e） | ✅ **已完成**（2026-09-28 收口） | 4.4 `RealDiscoveryTests` 真实 KRPC 闭环 / 4.5 `KnownDefectsTests` 回归守卫 / 4.6 `e2e-verify.ps1` 明文往返断言 A29–A32 + A29a/A29b/A33/A34/**A35（场景三 `/connect` 双向端到端）**。**最新 e2e 实测 `PASS=42 / FAIL=0 / SKIP=0`，退出码 0**（起始基线 32/5，Lead 亲自实跑）。⚠️ **曾记的 `PASS=39/FAIL=0` 对「消息显示」是假绿灯**，见 `HANDOFF.md` §8.1.2 |
-| 各阶段对应的 Agent Note | ✅ 阶段 0–3 已补 | 阶段 0–3 + `/connect` 共 **11 组**；全库 `notes/` 下已无 `Status: proposed` |
+| 各阶段对应的 Agent Note | ✅ 阶段 0–3 已补 | 阶段 0–3 + `/connect` 共 **11 组**；全库 `.agents/notes/` 下已无 `Status: proposed` |
 
 **2026-09-28 收口轮新增/确认的完成项**（均为本轮或上一轮实测落地，细节见 [HANDOFF.md](HANDOFF.md)）：
 
@@ -96,7 +96,7 @@
 
 > 📌 **以上两条的现状（2026-09-28 追记，上文按当时原样保留）：**
 > 第二条 `/connect <ip:port>` 已在 2026-09-21 落地，见
-> [`notes/implemented/feature/2026-09-21-blind-connect.zh.md`](notes/implemented/feature/2026-09-21-blind-connect.zh.md)。
+> [`.agents/notes/implemented/feature/2026-09-21-blind-connect.zh.md`](.agents/notes/implemented/feature/2026-09-21-blind-connect.zh.md)。
 > 第一条群邀请公钥问题**仍未解决**——补长期公钥属线路变更，需双方同时升级；
 > 跟踪于 `HANDOFF.md` §8 遗留 #2。
 
@@ -111,7 +111,7 @@
 > `MessageRouter.cs`、`MessageEnvelope.cs`、`FileTransferService.cs`、各测试文件）当轮无并发修改，行号已逐条 grep 核对。
 > **若确需 `MainlineDhtService.cs` 的行号，请自行 grep 复核，不要直接引用本文档。**
 
-落地决策：[`notes/implemented/bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md`](notes/implemented/bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md)
+落地决策：[`.agents/notes/implemented/bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md`](.agents/notes/implemented/bug-fix/2026-09-20-public-dht-peer-discovery-gap.zh.md)
 
 | 编号 | 动作 | 落地位置 | 验证结果 |
 |---|---|---|---|
@@ -124,7 +124,7 @@
 
 ### 阶段 2 实施记录
 
-落地决策：[`notes/implemented/bug-fix/2026-09-21-nat-traversal.zh.md`](notes/implemented/bug-fix/2026-09-21-nat-traversal.zh.md)
+落地决策：[`.agents/notes/implemented/bug-fix/2026-09-21-nat-traversal.zh.md`](.agents/notes/implemented/bug-fix/2026-09-21-nat-traversal.zh.md)
 
 | 编号 | 动作 | 落地位置 | 验证结果 |
 |---|---|---|---|

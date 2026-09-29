@@ -6,7 +6,7 @@ Status: implemented
 
 `MessageRouter.SendAsync` / `SendViaConnectionAsync`（`src/P2PChat.Chat/Routing/MessageRouter.cs`）把 `Message` 序列化进 `MessageEnvelope` 后直接 `connection.SendAsync(...)` 出栈；接收端 `RouteIncomingAsync` 反序列化后直接派发到对应 `IMessageHandler`，**全程没有任何签名/验签环节**。
 
-后果：`SenderId` 仍是攻击者可控的输入。`notes/implemented/bug-fix/2026-09-20-message-sender-identity.md` 已确认 `SenderId` 统一改用 `KeyPair.NodeId`，但同一 note 的 §"Not covered" 段明确指出：「本变更只保证诚实节点自报真实身份，没有签名，攻击者可任意填写他人的 `SenderId`。」本期（REPAIR-PLAN §3.2）即处理此遗漏。
+后果：`SenderId` 仍是攻击者可控的输入。`.agents/notes/implemented/bug-fix/2026-09-20-message-sender-identity.md` 已确认 `SenderId` 统一改用 `KeyPair.NodeId`，但同一 note 的 §"Not covered" 段明确指出：「本变更只保证诚实节点自报真实身份，没有签名，攻击者可任意填写他人的 `SenderId`。」本期（REPAIR-PLAN §3.2）即处理此遗漏。
 
 实测：
 - `IEncryptionService.Sign` / `Verify`（`src/P2PChat.Crypto/Encryption/AesGcmEncryptionService.cs:104-128`）已经实现（ECDSA P-256 + SHA-256），但仓库内零调用点。
@@ -73,4 +73,4 @@ Status: implemented
 - **`SenderPublicKey` 与 `Signature` 均为可选项（`byte[]?`）**——`VerifyEnvelope` 在调用顺序上先检查 `Signature`、再 `SenderPublicKey`、再 NodeId 一致性、最后 ECDSA 验签；任一关卡失败即短路返回 false + 失败原因。
 - **签名覆盖到 `Payload`，意味着篡改 Message 子类的任何 wire 字段都会被验签失败路径捕获。** 这是本任务想要的——攻击者改 SenderId / ConversationId / Content / FileMeta.ChunkSize 全部都会被验签拦截。
 - **Verification：** 9 条新增 `MessageSigningTests` + 既有 106 条测试不变覆盖「端到端还原 / SenderId 篡改 / Payload 篡改 / 缺签名 / 缺公钥 / NodeId 一致性 / 线缆序列化往返 / 静态往返 / 双节点集成」全部路径。`Agent.md` §"群消息安全语义" 段无需更新（本任务为签名，与加密并列）。
-- **同步修订 `notes/implemented/bug-fix/2026-09-20-message-sender-identity.md` §"Not covered" 段**——按 README §"Moving between lifecycles" 允许 editing implemented note to track where its existing decision lives 的规定，把 §"Not covered" 段从「未覆盖 SenderId 可伪造」改写为「已在 [2026-09-21-message-signing](2026-09-21-message-signing.md) 修复」并加交叉链接。决策本身未改。
+- **同步修订 `.agents/notes/implemented/bug-fix/2026-09-20-message-sender-identity.md` §"Not covered" 段**——按 README §"Moving between lifecycles" 允许 editing implemented note to track where its existing decision lives 的规定，把 §"Not covered" 段从「未覆盖 SenderId 可伪造」改写为「已在 [2026-09-21-message-signing](2026-09-21-message-signing.md) 修复」并加交叉链接。决策本身未改。

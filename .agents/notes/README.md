@@ -121,4 +121,4 @@ Status: <status>
 
 ### 双语副本（如果有）
 
-`<filename>.zh.md` 镜像英文版的结构（一节对一节），遵循你的 i18n 契约；机器检查的头部标记（`# Agent Note: ` 与 `Status:` 行）保留英文原文。格式门跳过 `.zh.md` 文件——配对门检查一致性。
+`<filename>.zh.md` 镜像英文版的结构（一节对一节），遵循你的 i18n 契约；机器检查的头部标记（`# Agent Note: ` 与 `Status:` 行）保留英文原文。格式门跳过 `.zh.md` 文件——配对门检查一致性。本仓库的 sidecar 契约（`<note>.i18n.yaml` 一致性记录的内容、两个双语标记，以及代替配对门禁的人工评审检查项）由 [`README.i18n.tokens.md`](README.i18n.tokens.md) 定义。

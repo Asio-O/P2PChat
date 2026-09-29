@@ -68,5 +68,5 @@ var chatEvent = new ChatMessageEvent
 - `dotnet build` 0 错 0 警；`dotnet test` 全绿（基线 + 新增 4 条守卫）。
 - **线路语义变更，新旧版本不可互通。** 旧版本客户端 `Content` 是明文，新版本会把它当作 Base64 密文去解密并失败丢弃。当前阶段无可用版本，无需提供迁移。
 - **群密钥本身的明文存储。** 仍沿用现状 `group_keys.json` 平文本；本阶段不动。
-- **群消息源伪造。** 攻击者持有 GroupId 即可注入假消息。本阶段只做加密、不做签名（签名由 3.2 处理）；此风险在 3.2 落定前持续存在——`notes/implemented/bug-fix/2026-09-20-message-sender-identity.md` §"Not covered" 部分已在该 note 注明，3.2 完成时按 README §"Moving between lifecycles" 允许 editing implemented note to track where its existing decision lives 的规定同步改写。
+- **群消息源伪造。** 攻击者持有 GroupId 即可注入假消息。本阶段只做加密、不做签名（签名由 3.2 处理）；此风险在 3.2 落定前持续存在——`.agents/notes/implemented/bug-fix/2026-09-20-message-sender-identity.md` §"Not covered" 部分已在该 note 注明，3.2 完成时按 README §"Moving between lifecycles" 允许 editing implemented note to track where its existing decision lives 的规定同步改写。
 - **Verification：** 4 条新增 `群消息加密_*` 守卫 + 1 条改写的 `发送群消息_向所有其他成员扇出_*` 守卫覆盖「端到端还原 / 明文不上线 / 解密失败丢弃 / 长度不足丢弃 / 扇出」全部路径。
