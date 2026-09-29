@@ -42,6 +42,14 @@ logs/
 # ---- 内部文档（仅本地保留，不进入公开仓库）----
 tests/P2PChat.Integration.Tests/DEFECTS.md
 
+# ---- 本地产物与临时文档 ----
+# 正式架构文档以根目录 Agent.md 为唯一真相源，不要再产出 docs/ 下的副本。
+# build/test 报告是 dotnet 命令的原始控制台输出（含本机绝对路径），一次性的。
+# 根锚定：只忽略仓库根的 docs/，不要连带吃掉 .agents/docs/
+/docs/
+*-build-report.txt
+*-test-report.txt
+
 # ---- NuGet ----
 *.nupkg
 *.snupkg
