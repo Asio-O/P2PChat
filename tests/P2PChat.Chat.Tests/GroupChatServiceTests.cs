@@ -114,7 +114,8 @@ public class GroupChatServiceTests
         invite.EncryptedGroupKeyNonceAndTag!.Length.ShouldBe(NonceLength + TagLength);
 
         // 旧版 DHT 节点的包装密钥 = SHA256(其 32 字节公钥)
-        // PublicKey 现为可空（"未知" 是显式状态，见 task-4）；此处是测试自建的本地节点，必然非空。
+        // PublicKey 可空是刻意设计（null 表示「尚未知」，见 NodeInfo.PublicKey 的注释）；
+        // 此处是测试自建的本地节点，必然非空。
         var wrappingKey = SHA256.HashData(legacy.PublicKey!);
         var full = new byte[NonceLength + 32 + TagLength];
         invite.EncryptedGroupKeyNonceAndTag.AsSpan(0, NonceLength).CopyTo(full);

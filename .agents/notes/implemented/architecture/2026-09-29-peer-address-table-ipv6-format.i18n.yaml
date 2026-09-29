@@ -1,0 +1,32 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/implemented/architecture/2026-09-29-peer-address-table-ipv6-format.md
+  zh: notes/implemented/architecture/2026-09-29-peer-address-table-ipv6-format.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: The peer address table hardcodes a 4-byte address field, so IPv6 entries arrive as a second field"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+      - Deferred
+      - Related
+    tokens: []
+  zh:
+    heading: "# Agent Note: 对端地址表把地址字段宽度硬编码为 4 字节，因此 IPv6 条目以第二个字段承载"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+      - Deferred
+      - Related
+    tokens: []
+
+recorded: 2026-09-29

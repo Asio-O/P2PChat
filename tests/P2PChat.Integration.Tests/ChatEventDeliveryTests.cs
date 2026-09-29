@@ -7,7 +7,10 @@ using Shouldly;
 namespace P2PChat.Integration.Tests;
 
 /// <summary>
-/// 跨组件回归守卫 —— 阻断级缺陷「收到的私聊/群聊消息永远不显示」（REPAIR-PLAN B3）。
+/// 跨组件回归守卫 —— 阻断级缺陷「收到的私聊/群聊消息永远不显示」。
+/// 现行不变量（<c>Channel&lt;ChatMessageEvent&gt;</c> 全进程只允许存在一条）见
+/// <c>Agent.md</c> §2.3「唯一来源铁律」与 §8.1 第 14 条；该事故的由来见归档快照
+/// <c>.agents/notes/archived/process/2026-09-20-p2pchat-repair-plan.md</c>。
 /// <para>
 /// <b>缺陷回顾</b>：<c>PrivateMessageHandler</c> / <c>GroupMessageHandler</c> 各自持有<b>私有的</b>
 /// <c>Channel&lt;ChatMessageEvent&gt;</c> 并写入，而 TUI 读的是 <c>ChatService._messageChannel</c>。

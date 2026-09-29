@@ -14,12 +14,16 @@ using Shouldly;
 namespace P2PChat.Integration.Tests;
 
 /// <summary>
-/// 「对端长期公钥」链路 —— 见 task-4 / REPAIR-PLAN §阶段0 遗留 + HANDOFF §8 遗留 #2。
+/// 「对端长期公钥」链路 —— 静态登记（<c>/add</c>）与盲连接（<c>/connect</c>）拿不到对端公钥时，
+/// 从哪里取、按什么顺序降级。现行三级降级（<c>NodeInfo.PublicKey</c> → <c>PeerPublicKeyRegistry</c>
+/// → 主动发一次 <c>KeyExchangeMessage</c> 探测）见 <c>Agent.md</c> §3.4；该遗留项的由来见归档快照
+/// <c>.agents/notes/archived/process/2026-09-28-p2pchat-handoff.md</c>。
 /// <para>
 /// 缺陷：<c>NodeInfo.PublicKey</c> 对静态登记（<c>/add &lt;nodeId&gt; &lt;ip:port&gt;</c>）与盲连接
 /// （<c>/connect &lt;ip:port&gt;</c>）的对端必然为空（<c>MainlineDhtService</c> 的每条解析路径也都返回空），
 /// 而群邀请的群密钥包装需要成员公钥 → 建群必然失败，且被 <c>CreateGroupAsync</c> 的
-/// <c>catch {}</c> 静默吞掉（REPAIR-PLAN B5：用户看到「/group create 没反应」，日志一行都没有）。
+/// <c>catch {}</c> 静默吞掉（用户看到「/group create 没反应」，日志一行都没有）。
+/// 该静默吞掉已修：<c>CreateGroupAsync</c> 现在对单个成员失败<b>显式记日志</b>且不中断建群。
 /// </para>
 /// <para>
 /// 本轮修复<b>不加线路字段</b>：对端的真实长期公钥取自<b>已验签的 <c>MessageEnvelope.SenderPublicKey</c></b>。

@@ -13,7 +13,9 @@ using Shouldly;
 namespace P2PChat.Integration.Tests;
 
 /// <summary>
-/// 消息签名/验签（REPAIR-PLAN §3.2）回归测试。
+/// 消息签名/验签回归测试 —— 线路信封携带 ECDSA P-256 签名
+/// （<c>SenderPublicKey</c> + <c>Signature</c>）之后，经真实 TCP 的验签与拒绝路径。
+/// 现行信封布局见 <c>Agent.md</c> §7「消息信封（Envelope）」。
 /// <para>
 /// 覆盖路径：
 /// (1) ECDSA 真实签名 → 反序列化 → 验签通过（两节点真实 TCP）。

@@ -374,10 +374,13 @@ public class KeyExchangeResponseVerificationTests
     /// <summary>
     /// 守卫 K2 —— <c>ChatService</c> 必须持有并使用 <c>IReplayGuard</c>。
     /// <para>
-    /// 这条对应 HANDOFF §8 记的「同一路径同时绕过重放防护」：
-    /// 该路径走不到 <c>MessageRouter.RouteIncomingAsync</c>，因而不在入站防护覆盖范围内。
-    /// <c>EnsureSessionKeyAsync</c> 里那个 <c>_replayGuard</c> 字段若被注入成
-    /// 「永远放行」的实现，判据④那条用例会变空转；这里钉住的是「确实过了一遍」。
+    /// 这条对应现行不变量「<b>每条把线上信封转成可使用对象的路径都必须自己过一遍重放防护</b>」
+    /// （<c>Agent.md</c> §8.1 第 18 条）：<c>ReadKeyExchangeResponseAsync</c> 走不到
+    /// <c>MessageRouter.RouteIncomingAsync</c>，因而不在入站防护覆盖范围内。
+    /// 它持有的 <c>_replayGuard</c> 若被注入成「永远放行」的实现，判据④那条用例会变空转；
+    /// 这里钉住的是「确实过了一遍」。
+    /// 事故由来见归档快照 <c>.agents/notes/archived/process/2026-09-28-p2pchat-handoff.md</c>
+    /// §8 —— <b>那是历史快照的编号，非现行权威</b>。
     /// </para>
     /// </summary>
     [Fact]

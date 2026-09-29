@@ -383,8 +383,9 @@ public class FileTransferIntegrityTests : IDisposable
     {
         // 2026-09-21-filetransfer-chunksize：发送循环此前硬编码 DefaultChunkSize (65536)，
         // 即便 meta 与 state.ChunkSize 都声明 4096，实际切片仍按 65536 进行。本测试
-        // 不依赖接收端 RPC 层（FileMeta/Chunk/Ack 处理器在生产路径上仍未接入路由器，详见
-        // REPAIR-PLAN §阶段 4 留口）；只观察 SendOfferAsync 产生的 meta 与 HandleFileAckAsync
+        // 不依赖接收端 RPC 层（FileMeta/FileChunk/FileAck 三个处理器至今未在
+        // Program.cs 里 RegisterHandler，仍是生产路径上的一处留口）；只观察
+        // SendOfferAsync 产生的 meta 与 HandleFileAckAsync
         // 触发的 SendFileChunksAsync 实际切片大小。RecordingMessageRouter 替代真实 TCP，
         // 模拟对端回送 Accepted 的 FileAck。
         var (sender, dht, router, _, remote) = BuildReceiver();

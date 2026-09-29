@@ -6,7 +6,8 @@ using Shouldly;
 namespace P2PChat.Integration.Tests;
 
 /// <summary>
-/// 回归守卫 —— HANDOFF §4.1「plain 模式无 stdin 输入通道」的锁死测试集。
+/// 回归守卫 —— 「plain 模式无 stdin 输入通道」的锁死测试集。
+/// 本文件同时是「结构契约守卫」写法的权威范本（见 <c>Agent.md</c> §6）。
 /// <para>
 /// 历史缺陷：<c>P2PChatTui.ReadKeyOrNull()</c> 在 <c>_plainMode</c> 下恒
 /// <c>return null</c>，而主循环「只有拿到按键才分派命令」——于是
@@ -25,8 +26,9 @@ namespace P2PChat.Integration.Tests;
 /// <c>EnsurePlainInputStarted</c> / <c>_plainInput</c> 全是 <c>private</c>，且
 /// <c>tests/P2PChat.Integration.Tests</c> <b>没有</b> 引用 <c>P2PChat.UI</c>。
 /// 要在进程内调用它们，必须先给测试工程加 ProjectReference，再把私有成员改成
-/// internal + <c>InternalsVisibleTo</c>，或者用反射 —— 三者分别属于 HANDOFF §5 步骤 2
-/// 明确排除的「为可测性改产品代码」与「不得引入反射（动态代码）」。本文件因此在零产品
+/// internal + <c>InternalsVisibleTo</c>，或者用反射 —— 三者都落在本仓库明确排除的两条线上：
+/// 「不得为可测性改产品代码」，以及「不得引入反射 / 动态代码」（后者会破坏 Native-AOT 发布，
+/// 见 <c>Agent.md</c> §8.1 第 1 条与 §4.3 AOT 禁忌清单）。本文件因此在零产品
 /// 改动的前提下，把修复的结构钉死。
 /// </para>
 ///

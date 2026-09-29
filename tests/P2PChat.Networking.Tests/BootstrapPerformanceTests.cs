@@ -13,7 +13,7 @@ using Xunit.Abstractions;
 namespace P2PChat.Networking.Tests;
 
 /// <summary>
-/// 引导耗时回归测试 —— 锁死 REPAIR-PLAN 阶段 1.5 的两条语义边界：
+/// 引导耗时回归测试 —— 锁死引导阶段的两条语义边界：
 /// <list type="number">
 ///   <item>
 ///     **不得退回「首个成功即 break」**：所有可达的引导节点都必须被 PING 且进入路由表，

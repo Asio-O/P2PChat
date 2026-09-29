@@ -408,7 +408,7 @@ try {
     Add-Result 'A28' '所有实例共用同一 exe 路径（未复制 exe，避免防火墙重复询问）' $(if ($sameExe) { 'PASS' } else { 'FAIL' }) "nodeA=$($nodeA.ExePath); nodeB=$($nodeB.ExePath)"
 
     # ---- 8. 明文往返：Phase 2 重启 + 预置联系人 + stdin 注入 --------------------
-    # REPAIR-PLAN §4.6：两实例互发一条消息，接收端日志/输出出现明文。
+    # 两实例互发一条消息，接收端日志/输出出现明文。
     # Phase 1 已捕获 Node A/B 的 NodeId 与公网入口 IP+端口；本阶段在「线性输出」
     # 模式（`P2PCHAT_PLAIN=1`）下重启两个实例 —— `DrainInbox` 会把每条聊天事件
     # 逐行写入 stdout —— 预置 Node B 到 Node A 的 `contacts.json`（静态对端 + 已知
@@ -465,7 +465,7 @@ try {
             'P2PCHAT_PLAIN'            = '1'
         }
         # PreserveDataDir：contacts.json 已在上面预置好，绝不能被 Start-P2PNode 删掉
-        # （历史事故：Phase 2 一直以「零联系人」启动，/msg nodeB 静默失败，见 HANDOFF §4.3）
+        # （历史事故：Phase 2 一直以「零联系人」启动，/msg nodeB 静默失败）
         $nodeA2 = Start-P2PNode -Name 'nodeA2' -DataDir $dataDirA2 -RunDir $runDirA2 -EnvVars $envA2 -PreserveDataDir
         $nodeB2 = Start-P2PNode -Name 'nodeB2' -DataDir $dataDirB2 -RunDir $runDirB2 -EnvVars $envB2
 
@@ -516,12 +516,17 @@ try {
         #
         # ⇒ **这种失败是安全修复生效的证据，不是回归。** 脚本才是需要修的一方：
         # 它一直在断言一个「按错误身份寻址」的场景，而那个场景此前之所以"能过"，
-        # 恰恰是因为产品缺了本该有的检查（REPAIR-PLAN B7 的同型案例：绿的那条指向的不是要证明的东西）。
+        # 恰恰是因为产品缺了本该有的检查 —— 这是「绿灯不等于被证明」那条纪律的同型案例：
+        # 判据不是「有没有测试」，是「它绿的那条断言指向的是不是要证明的那件事」
+        # （现行纪律见 Agent.md §6 与 §8.2.2 的 4.x 行；事故由来见归档快照
+        #  .agents/notes/archived/process/2026-09-20-p2pchat-repair-plan.md）。
         #
         # 修法与 A35 段保持一致：取 nodeB2 的**真实** NodeId 再寻址。
         # **别名刻意用 nodeB2live 而不是复用 nodeB** —— 预置那条 stale 联系人仍在 contacts.json 里，
-        # 同名会让 FindContact 的别名匹配 FirstOrDefault 取到 stale 那条
-        # （这本身是另一个已登记的开放缺陷，见 HANDOFF §8）。
+        # 同名会让 FindContact 的别名匹配 FirstOrDefault 取到 stale 那条。
+        # ⚠️ **该前缀歧义本身是另一条仍开放的缺陷，登记在根 `HANDOFF.md` §2 开放项**；
+        # 本段只是因此**必须**用不同别名绕开它 —— 两者不要混为一谈。
+        #
         #
         # ⚠️ **必须等，不能用固定 sleep**：`本地节点ID` 是在 UPnP 探测**之后**才写的，
         # 比 `TCP监听已启动` 晚约 3 秒（实测 16:02:57.874 vs 16:03:00.888）。
@@ -705,7 +710,7 @@ try {
         $plainInCombined = $outB2.Combined -match [regex]::Escape($plaintext)
         Add-Result 'A31' 'Phase 2：nodeB2 StdOut+Log 累计中包含明文（plain 模式 DrainInbox 写入）' $(if ($plainInCombined) { 'PASS' } else { 'FAIL' }) $(if ($plainInCombined) { 'matched' } else { "no match in $($outB2.Combined.Length)B combined" })
 
-        # A32 的**旧断言是错的**，本轮修正（见 HANDOFF §4.3）：
+        # A32 的**旧断言是错的**，本轮修正：
         # 旧版断言「nodeA2 看不到明文」，隐含假设是「plain 模式不回显本地事件流」。
         # 但 `DrainInbox` 在 plain 模式下会把**每一条** inbox 项（含
         # `ChatService.SendPrivateMessageAsync` 本地推送的 IsOutgoing=true 事件）

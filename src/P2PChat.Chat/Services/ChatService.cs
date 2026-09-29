@@ -17,7 +17,9 @@ namespace P2PChat.Chat.Services;
 /// 同时是整条聊天事件流的<b>唯一持有者与唯一出口</b>：出站消息的本地回显写进
 /// <see cref="_messageChannel"/>，入站消息由 <c>PrivateMessageHandler</c> /
 /// <c>GroupMessageHandler</c> 经 <see cref="IChatEventPublisher"/> 写进**同一个**通道。
-/// 见 REPAIR-PLAN B3 —— 这两个写入口此前各自持有私有通道，导致「收到的消息永远不显示」。
+/// 这两个写入口此前各自持有私有通道，导致「收到的消息永远不显示」。
+/// 现行不变量见 <c>Agent.md</c> §2.3「唯一来源铁律」与 §8.1 第 14 条；
+/// 该事故的由来见归档快照 <c>.agents/notes/archived/process/2026-09-20-p2pchat-repair-plan.md</c>。
 /// </para>
 /// </summary>
 public class ChatService : IChatService, IChatEventPublisher
@@ -149,7 +151,9 @@ public class ChatService : IChatService, IChatEventPublisher
     /// <para>
     /// 这是 <see cref="IChatEventPublisher"/> 的唯一实现点，也是入站消息抵达 UI 的**唯一**路径。
     /// 此前本方法在 <c>src/**</c> 里零调用者 —— handler 把事件写进了自己的私有通道，
-    /// 而 UI 读的是这里，于是「收到」与「看到」之间没有任何连线（REPAIR-PLAN B3）。
+    /// 而 UI 读的是这里，于是「收到」与「看到」之间没有任何连线。
+    /// 现行不变量见 <c>Agent.md</c> §2.3「唯一来源铁律」与 §8.1 第 14 条；
+    /// 该事故的由来见归档快照 <c>.agents/notes/archived/process/2026-09-20-p2pchat-repair-plan.md</c>。
     /// 现在 <c>PrivateMessageHandler</c> / <c>GroupMessageHandler</c> 都注入
     /// <see cref="IChatEventPublisher"/> 并调用本方法。
     /// </para>

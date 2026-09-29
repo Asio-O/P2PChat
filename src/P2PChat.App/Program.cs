@@ -67,9 +67,10 @@ public class Program
         var preferredTcpPort = chatConfig.GetValue<int>("TcpPort", 0);
         var kBucketSize = chatConfig.GetValue<int>("KBucketSize", 20);
         var alpha = chatConfig.GetValue<int>("Alpha", 3);
-        // 入站重放防护的时间窗（REPAIR-PLAN 阶段 2.3）。<= 0 是「关闭时间窗」的逃生阀，
+        // 入站重放防护的时间窗。<= 0 是「关闭时间窗」的逃生阀，
         // 供时钟严重偏移的机器自救 —— 但关闭必须是**显式**的，启动时会 LogWarning 并在
         // 自检块显示「已关闭」，不允许它只悄悄躺在配置文件里。
+        // 现行约定（含关闭开关到底关掉了什么）见 Agent.md §7「关闭开关（逃生阀）」。
         // 这里只做解析与钳制，TimeSpan 的换算放在下面 —— 配置写错不能让进程起不来。
         var replayMaxAgeSeconds = chatConfig.GetValue<double>("ReplayMaxAgeSeconds", 3600);
         var bootstrapNodes = chatConfig.GetSection("BootstrapNodes")

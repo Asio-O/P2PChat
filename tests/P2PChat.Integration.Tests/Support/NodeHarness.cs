@@ -142,8 +142,10 @@ public sealed class NodeHarness : IAsyncDisposable
 
         // ChatService 必须是**先**建出来的：它是整条聊天事件流的唯一持有者，
         // 两个消息 handler 要把解密后的事件投递进它持有的那条通道。
-        // 见 REPAIR-PLAN B3 —— 此前两个 handler 各持一条私有通道，UI 读的是 ChatService 的，
+        // 此前两个 handler 各持一条私有通道，UI 读的是 ChatService 的，
         // 于是「收到」与「看到」之间没有任何连线（消息收到但界面永远空白）。
+        // 现行不变量见 Agent.md §2.3「唯一来源铁律」与 §8.1 第 14 条；
+        // 该事故的由来见归档快照 .agents/notes/archived/process/2026-09-20-p2pchat-repair-plan.md。
         var chat = new ChatService(dht, capturingRouter, encryption, keyStore,
             new MessageReplayGuard(NullLogger<MessageReplayGuard>.Instance),
             NullLogger<ChatService>.Instance);
@@ -155,7 +157,7 @@ public sealed class NodeHarness : IAsyncDisposable
             encryption, keyStore, chat, NullLogger<GroupMessageHandler>.Instance);
         // dht = 本 fixture 的 FakeDhtService（上方 L141 已建）。KeyExchangeHandler 需要它来把
         // 「主动 /connect 而来的对端」用**已验签的** envelope.SenderId + RemoteEndPoint 反向登记
-        // 为静态对端（/connect 变双向，见 task-23）。
+        // 为静态对端（这条反向登记就是 `/connect` 变双向的原因，见 Agent.md §3.6）。
         var keyExchange = new KeyExchangeHandler(
             encryption, keyStore, NullLogger<KeyExchangeHandler>.Instance, dht);
         var inviteHandler = new GroupInviteHandler(encryption, keyStore, NullLogger<GroupInviteHandler>.Instance);

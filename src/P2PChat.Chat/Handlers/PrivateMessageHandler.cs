@@ -12,7 +12,8 @@ namespace P2PChat.Chat.Handlers;
 /// <b>本类不再持有任何 <c>Channel&lt;ChatMessageEvent&gt;</c></b>，也<b>不再暴露</b>
 /// <c>OnMessageReceived</c>。解密出的事件一律经 <see cref="IChatEventPublisher"/> 投递到
 /// <c>ChatService</c> 持有的那唯一一条事件流 —— 那才是 UI 真正消费的那条。
-/// 见 REPAIR-PLAN B3 与 <see cref="IChatEventPublisher"/> 的「唯一来源铁律」。
+/// 见 <see cref="IChatEventPublisher"/> 的「唯一来源铁律」与 <c>Agent.md</c> §2.3 / §8.1 第 14 条；
+/// 该事故的由来见归档快照 <c>.agents/notes/archived/process/2026-09-20-p2pchat-repair-plan.md</c>。
 /// </para>
 /// </summary>
 public class PrivateMessageHandler : IMessageHandler<TextMessage>

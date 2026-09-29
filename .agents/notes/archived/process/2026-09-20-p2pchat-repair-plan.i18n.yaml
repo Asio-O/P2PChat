@@ -1,0 +1,51 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/archived/process/2026-09-20-p2pchat-repair-plan.md
+  zh: notes/archived/process/2026-09-20-p2pchat-repair-plan.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: P2PChat 跨设备不可用 — 分析与修复方案（冻结工作文档）"
+    status: "Status: implemented"
+    sections:
+      - 结论摘要
+      - 实施进度
+      - 一、断点定位（按用户实际操作顺序）
+      - 二、修复方案
+      - 三、优先级建议
+      - 四、需要确认的一个前提 —— ✅ **已获答复（2026-09-29）**
+    tokens: []
+  zh:
+    heading: "# Agent Note: P2PChat 跨设备不可用 — 分析与修复方案（冻结工作文档）"
+    status: "Status: implemented"
+    sections:
+      - 结论摘要
+      - 实施进度
+      - 一、断点定位（按用户实际操作顺序）
+      - 二、修复方案
+      - 三、优先级建议
+      - 四、需要确认的一个前提 —— ✅ **已获答复（2026-09-29）**
+    tokens: []
+
+recorded: 2026-09-29
+
+# ── 人工评审检查项（代替配对门禁；本仓库无配对门禁脚本） ──────────────
+#
+# 1. **有意偏离：两份语言文件的正文逐字相同。**
+#    正常配对的约定是「中文为记录本体、英文镜像其结构」。本 Note **不满足**该形状：
+#    `.md` 与 `.zh.md` 的正文**都是中文且逐字相同**。
+#    理由：这是一份**冻结的归档制品**，按归档规则**永不修改**。
+#    翻译会引入两份一旦出错就**永远无法修正**的副本 —— 对归档来说，
+#    **逐字保真比双语对称更重要**。可翻译的决策记录请写在 `implemented/` / `proposed/`。
+#    评审确认点：两文件 SHA256 必须相同（归档时记录，见归档提交）。
+#
+# 2. 本 Note **不是 ADR 骨架**：它没有 `## Problem` / `## Decision` /
+#    `## Alternatives considered` / `## Consequences`，而是原工作文档的
+#    中文小节名（见上方 `sections`）。归档路径 `archived/{class}/…` 沿用了
+#    `process` 这一 class，但**内容形态仍是工作文档而非决策记录**。
+#    若日后有门禁强制 ADR 骨架，本归档件会因这一条被拒 —— 这是**已知且有意**的。
+#
+# 3. **不要**校验本 Note 的**出站**链接：文件内部大量 `[HANDOFF.md](HANDOFF.md)` 形式的
+#    相对链接，在两个文件被移进同一目录后已不再解析。归档规则明令**永不**修复出站链接。

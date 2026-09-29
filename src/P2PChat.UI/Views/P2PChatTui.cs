@@ -20,8 +20,10 @@ namespace P2PChat.UI.Views;
 /// 而 <c>Program.cs</c>（App）引用 UI，可以直接构造它并注册进 DI。
 /// </para>
 /// <para>
-/// 对应 REPAIR-PLAN 阶段 2.3 的「降级要明示，不要静默失败」：用户必须能一眼看出
+/// 「降级要明示，不要静默失败」：用户必须能一眼看出
 /// 「超过 N 分钟的消息会被丢弃」，以及在时钟严重偏移的机器上是否已关掉这个时间窗。
+/// 现行约定见 <c>Agent.md</c> §7「关闭开关（逃生阀）」；该原则的事故由来见归档快照
+/// <c>.agents/notes/archived/process/2026-09-20-p2pchat-repair-plan.md</c>。
 /// </para>
 /// </summary>
 /// <param name="TimeWindowEnabled">时间窗是否启用。<c>false</c> 表示
@@ -40,8 +42,7 @@ public sealed record ReplayGuardStatus(bool TimeWindowEnabled, TimeSpan MaxAge)
     /// 把时间窗长度格式化成人类可读文本：小于 1 分钟用秒，否则用分钟；
     /// 达到 1 天才改用小时，避免出现「1440 分钟」这种没人愿意读的数字。
     /// <para>
-    /// 默认值 3600s 因此显示为「60 分钟」—— 与 REPAIR-PLAN 阶段 2.3 的示例文案一致，
-    /// 也让 e2e / config-probe 的断言可以按这个字面量写。
+    /// 默认值 3600s 因此显示为「60 分钟」—— 也让 e2e / config-probe 的断言可以按这个字面量写。
     /// </para>
     /// </summary>
     public static string FormatAge(TimeSpan age)
@@ -199,7 +200,7 @@ public sealed class P2PChatTui(
             _ => natState.ToString()
         };
         Console.WriteLine($"UPnP 状态:  {natState} ({natText})");
-        // 入站重放防护（REPAIR-PLAN 阶段 2.3：降级要明示）。与「宣告状态」「UPnP 状态」同风格，
+        // 入站重放防护（「降级要明示」，见 Agent.md §7 关闭开关（逃生阀））。与「宣告状态」「UPnP 状态」同风格，
         // 冒号后补 3 个空格对齐到第 12 列。状态是注入的不可变值（ReplayGuardStatus），
         // 不是现场探测 —— 配置在启动时解析一次，这里如实展示。
         Console.WriteLine($"重放防护:   {replayGuard.Describe()}");

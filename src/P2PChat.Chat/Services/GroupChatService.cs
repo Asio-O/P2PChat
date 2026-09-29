@@ -121,8 +121,11 @@ public class GroupChatService : IGroupChatService
 
         // 向每个初始成员发送邀请。
         // 注意：单个成员失败**不得**中断建群（历史行为），但任何失败都必须留下日志 ——
-        // REPAIR-PLAN B5 指出原来的 catch {} 静默吞掉是实质缺陷：用户看到「/group create 没反应」，
-        // 日志里一行都没有，既定位不了也区分不了「对端离线」和「群密钥没送出去」。
+        // 静默吞掉是实质缺陷：用户看到「/group create 没反应」，日志里一行都没有，
+        // 既定位不了也区分不了「对端离线」和「群密钥没送出去」。
+        // 群链路「拿不到就显式记 Error 并跳过该成员」的现行约定见 <c>Agent.md</c> §3.4
+        // （成员公钥三级解析）；该事故的由来见归档快照
+        // <c>.agents/notes/archived/process/2026-09-20-p2pchat-repair-plan.md</c>。
         foreach (var memberNodeId in initialMembers)
         {
             if (memberNodeId.Equals(creatorNodeId)) continue;

@@ -5,11 +5,13 @@ namespace P2PChat.Core.Abstractions;
 /// <summary>
 /// 聊天事件发布器 —— <b>整条聊天消息事件流的唯一出口</b>。
 /// <para>
-/// 为什么要有这个接口（见 REPAIR-PLAN B3）：消息处理器此前各自持有<b>私有的</b>
+/// 为什么要有这个接口：消息处理器此前各自持有<b>私有的</b>
 /// <c>Channel&lt;ChatMessageEvent&gt;</c>，而 UI 读的是 <see cref="IChatService.OnMessageReceived"/>
 /// （另一个通道）。于是「handler 确实收到并解密了消息」与「用户看到这条消息」之间没有任何连线：
 /// <c>PublishMessageAsync</c> 在 <c>src/**</c> 里零调用者。净效果是
 /// <b>能看到自己发出去的消息，永远看不到任何人发来的消息</b>，私聊与群聊皆然。
+/// 现行不变量见 <c>Agent.md</c> §2.3「唯一来源铁律」与 §8.1 第 14 条；
+/// 该事故的由来见归档快照 <c>.agents/notes/archived/process/2026-09-20-p2pchat-repair-plan.md</c>。
 /// </para>
 /// <para>
 /// 为什么不直接让 handler 依赖 <see cref="IChatService"/>：那是「协议处理器反向依赖业务服务」，

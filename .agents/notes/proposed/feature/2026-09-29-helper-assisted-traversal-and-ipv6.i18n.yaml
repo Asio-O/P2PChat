@@ -1,0 +1,46 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/proposed/feature/2026-09-29-helper-assisted-traversal-and-ipv6.md
+  zh: notes/proposed/feature/2026-09-29-helper-assisted-traversal-and-ipv6.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: Helper-assisted traversal from stranger nodes, and IPv6 in the transport layer"
+    status: "Status: proposed"
+    sections:
+      - Problem
+      - Proposal
+      - The parts already in place
+      - Bounded to establishing the connection
+      - Defaults and visibility
+      - Identity disclosure
+      - The three gaps
+      - IPv6
+      - Open questions
+      - Alternatives considered
+      - Acceptance criteria
+      - Risks
+      - Related
+    tokens: []
+  zh:
+    heading: "# Agent Note: 陌生节点协助穿透，以及传输层的 IPv6"
+    status: "Status: proposed"
+    sections:
+      - Problem
+      - Proposal
+      - The parts already in place
+      - Bounded to establishing the connection
+      - Defaults and visibility
+      - Identity disclosure
+      - The three gaps
+      - IPv6
+      - Open questions
+      - Alternatives considered
+      - Acceptance criteria
+      - Risks
+      - Related
+    tokens: []
+
+recorded: 2026-09-29

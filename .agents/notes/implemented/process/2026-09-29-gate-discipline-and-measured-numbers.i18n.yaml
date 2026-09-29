@@ -1,0 +1,42 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/implemented/process/2026-09-29-gate-discipline-and-measured-numbers.md
+  zh: notes/implemented/process/2026-09-29-gate-discipline-and-measured-numbers.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: Gate evidence discipline — a value without a run and an author is not evidence"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - 1. The formal gate is a fixed command set, and an incremental build is never evidence
+      - 2. A value reported by someone else finds problems; it never records results
+      - 3. A cell that cannot be attributed to a run stays empty
+      - 4. One quantity, one home
+      - 5. A changed third-party AOT warning count is re-judged from the output, never inherited
+      - 6. An end-to-end gate's red runs are part of its result
+      - Alternatives considered
+      - Consequences
+      - Related
+    tokens: []
+  zh:
+    heading: "# Agent Note: 门禁证据纪律 —— 缺了实测轮次与署名的数字不是证据"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - 1. The formal gate is a fixed command set, and an incremental build is never evidence
+      - 2. A value reported by someone else finds problems; it never records results
+      - 3. A cell that cannot be attributed to a run stays empty
+      - 4. One quantity, one home
+      - 5. A changed third-party AOT warning count is re-judged from the output, never inherited
+      - 6. An end-to-end gate's red runs are part of its result
+      - Alternatives considered
+      - Consequences
+      - Related
+    tokens: []
+
+recorded: 2026-09-29
