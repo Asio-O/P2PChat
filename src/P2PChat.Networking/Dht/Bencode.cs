@@ -201,4 +201,117 @@ public static class Bencode
         }
         return result;
     }
+
+    // ─── p2pc_peers6：IPv6 版扩展条目 ─────────────────────────────────────────
+    //
+    // 为什么**另开一个字段**而不是给 26 字节条目加宽度标记位：
+    // 决定性的理由是**老节点的失败模式**。bencode 字典里老节点找不到 `p2pc_peers6`
+    // ⇒ 它只会走 `values` 兜底而**得不到任何条目** ⇒ 干净降级。
+    // 而「加标记位」那条路里，老节点遇到不认识的宽度会**按 26 字节错位切分**
+    // ⇒ 把新格式解析成错条目。**误解析远比缺失危险**（同阶段 3.2 EnvelopeCodec 事故）。
+    // 而 `p2pc_peers`（26B，IPv4）保持**字节级不变**，本就不需要任何向后兼容处理。
+
+    /// <summary>IPv4 扩展条目长度：<c>[20B NodeId][4B IPv4][2B Port]</c>。</summary>
+    public const int CompactPeerV4Size = 26;
+
+    /// <summary>IPv6 扩展条目长度：<c>[20B NodeId][16B IPv6][2B Port]</c>。</summary>
+    public const int CompactPeerV6Size = 38;
+
+    /// <summary>BitTorrent 标准 <c>values</c> 条目长度：<c>[4B IPv4][2B Port]</c>，**不含 NodeId**。</summary>
+    public const int CompactPeerValueSize = 6;
+
+    /// <summary>
+    /// 解析 <c>p2pc_peers6</c>（IPv6 扩展条目，38 字节/条）。
+    /// <para>
+    /// 与 <see cref="ParseCompactPeers26"/> 的唯一差别是地址字段宽度：16 字节而非 4。
+    /// 端口同样是大端 2 字节，NodeId 同样在条目开头 —— 布局刻意与 26B 版保持平行，
+    /// 便于对照与将来的独立演进。
+    /// </para>
+    /// </summary>
+    public static List<(byte[] NodeId, System.Net.IPAddress Ip, int Port)> ParseCompactPeers38(byte[] peersData)
+    {
+        var result = new List<(byte[], System.Net.IPAddress, int)>();
+        if (peersData is null) return result;
+        const int entrySize = 38;
+        for (int i = 0; i + entrySize <= peersData.Length; i += entrySize)
+        {
+            var nodeId = new byte[20];
+            Buffer.BlockCopy(peersData, i, nodeId, 0, 20);
+            var ipBytes = new byte[16];
+            Buffer.BlockCopy(peersData, i + 20, ipBytes, 0, 16);
+            var port = (peersData[i + 36] << 8) | peersData[i + 37];
+            result.Add((nodeId, new System.Net.IPAddress(ipBytes), port));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// 解析 BitTorrent 标准的 6 字节 <c>values</c> 条目（<c>[4B IPv4][2B Port]</c>）。
+    /// <para>
+    /// <b>它不含 NodeId</b>，所以返回的 <c>NodeId</c> 一律为 <c>null</c>：
+    /// 标准格式无法让接收方把条目映射回具体节点。调用方必须自己决定怎么补 NodeId
+    /// （本项目用「响应者自己的 NodeId」，见 <c>MainlineDhtService</c> 的 <c>get_peers</c> 分支），
+    /// <b>不要</b>在这里替调用方编一个。
+    /// </para>
+    /// <para>
+    /// 此前该路径把 6 字节数据交给了按 26 字节切分的解析器（形参被忽略），
+    /// 切出来的是错位条目。之所以长期没暴露，是因为那条路径产出的结果
+    /// 无论如何都过不了「NodeId 必须等于查询目标」那一关而被下游丢弃 ——
+    /// <b>被掩盖的错位解析仍然是错位解析</b>，IPv6 一落地它就会开始产出看似合法的结果。
+    /// </para>
+    /// </summary>
+    public static List<(byte[]? NodeId, System.Net.IPAddress Ip, int Port)> ParseCompactValues6(byte[] valuesData)
+    {
+        var result = new List<(byte[]?, System.Net.IPAddress, int)>();
+        if (valuesData is null) return result;
+        const int entrySize = 6;
+        for (int i = 0; i + entrySize <= valuesData.Length; i += entrySize)
+        {
+            var ipBytes = new byte[4];
+            Buffer.BlockCopy(valuesData, i, ipBytes, 0, 4);
+            var port = (valuesData[i + 4] << 8) | valuesData[i + 5];
+            result.Add((null, new System.Net.IPAddress(ipBytes), port));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// 把一条对端条目序列化成对应地址族的扩展格式字节。
+    /// </summary>
+    /// <param name="nodeId">宣告方 NodeId（20 字节）。</param>
+    /// <param name="endPoint">该对端的端点；按其 <see cref="System.Net.Sockets.AddressFamily"/> 选格式。</param>
+    /// <exception cref="ArgumentException">
+    /// 端点地址族既非 IPv4 也非 IPv6 时抛出。
+    /// <para>
+    /// <b>刻意抛异常，而不是「截断成 4 字节」或「跳过」。</b>
+    /// 旧实现用固定 4 字节 <c>BlockCopy</c> 拷地址，对 IPv6 会**静默截断成一个语义上
+    /// 毫不相干的 IPv4 地址** —— 不抛异常、不记日志，下游无从察觉，地址表会开始
+    /// 对外播报错误地址。宁可在这里炸掉，也不要静默产出错误地址。
+    /// </para>
+    /// </exception>
+    public static byte[] SerializeCompactPeer(byte[] nodeId, System.Net.IPEndPoint endPoint)
+    {
+        ArgumentNullException.ThrowIfNull(nodeId);
+        ArgumentNullException.ThrowIfNull(endPoint);
+        if (nodeId.Length != 20)
+            throw new ArgumentException($"NodeId 必须是 20 字节，实际 {nodeId.Length}", nameof(nodeId));
+
+        var address = endPoint.Address;
+        int addressSize = address.AddressFamily switch
+        {
+            System.Net.Sockets.AddressFamily.InterNetwork => 4,
+            System.Net.Sockets.AddressFamily.InterNetworkV6 => 16,
+            _ => throw new ArgumentException(
+                $"不支持的地址族 {address.AddressFamily} —— 宁可不发，也不要静默产出错误地址", nameof(endPoint))
+        };
+
+        var entry = new byte[20 + addressSize + 2];
+        Buffer.BlockCopy(nodeId, 0, entry, 0, 20);
+        var ipBytes = address.GetAddressBytes();
+        Buffer.BlockCopy(ipBytes, 0, entry, 20, addressSize);
+        var port = endPoint.Port;
+        entry[entry.Length - 2] = (byte)(port >> 8);
+        entry[entry.Length - 1] = (byte)port;
+        return entry;
+    }
 }

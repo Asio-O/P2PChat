@@ -385,17 +385,22 @@ public class MainlineDhtService : IDhtService, IDisposable
         if (response.TryGetValue("token", out var tObj) && tObj is byte[] tBytes)
             token = tBytes;
 
-        List<(byte[] NodeId, IPAddress Ip, int Port)>? peers = null;
-        if (response.TryGetValue("p2pc_peers", out var ppObj) && ppObj is List<object> ppList)
+        List<(byte[]? NodeId, IPAddress Ip, int Port)>? peers = null;
+        if (response.TryGetValue("p2pc_peers6", out var pp6Obj) && pp6Obj is List<object> pp6List)
+        {
+            // IPv6 扩展条目（38B）：NodeId 就在条目里，可直接与查询目标比对。
+            peers = FlattenByteList(pp6List, Bencode.CompactPeerV6Size);
+        }
+        else if (response.TryGetValue("p2pc_peers", out var ppObj) && ppObj is List<object> ppList)
         {
             // p2pc_peers 是 bencode list<bytes> —— 解析为连续 26 字节空间。
-            peers = FlattenByteList(ppList, 26);
+            peers = FlattenByteList(ppList, Bencode.CompactPeerV4Size);
         }
         else if (response.TryGetValue("values", out var vObj) && vObj is List<object> vList)
         {
             // 公共节点按 BitTorrent 标准返回 6 字节 values：仅 IP+port，无 NodeId。
             // 我们用查询对端的 NodeId 作为这些 6 字节条目的 NodeId（peer-as-bootstrap 路径的自然延续）。
-            var flat = FlattenByteList(vList, 6);
+            var flat = FlattenValuesList(vList);
             if (flat.Count > 0)
             {
                 byte[]? responderId = null;
@@ -403,7 +408,9 @@ public class MainlineDhtService : IDhtService, IDisposable
                     responderId = idBytes;
                 if (responderId is not null)
                 {
-                    peers = flat.Select(p => (responderId, p.Ip, p.Port)).ToList();
+                    // 显式标注元素类型为 byte[]?：标准 values 条目本身不含 NodeId，
+                    // 这里补的是「响应者的」，所以结果集的 NodeId 一律可能为 null（见 Bencode.ParseCompactValues6）。
+                    peers = flat.Select(p => ((byte[]?)responderId, p.Ip, p.Port)).ToList();
                 }
             }
         }
@@ -411,7 +418,7 @@ public class MainlineDhtService : IDhtService, IDisposable
         return new KrpcGetPeersResult(token, peers);
     }
 
-    private readonly record struct KrpcGetPeersResult(byte[]? Token, List<(byte[] NodeId, IPAddress Ip, int Port)>? Peers);
+    private readonly record struct KrpcGetPeersResult(byte[]? Token, List<(byte[]? NodeId, IPAddress Ip, int Port)>? Peers);
 
     /// <summary>
     /// 宣告本节点的 NodeId→TCP 端口映射到给定对端。
@@ -571,19 +578,36 @@ public class MainlineDhtService : IDhtService, IDisposable
 
                     if (_peerCache.TryGetValue(ih.ToHexString(), out var peers))
                     {
+                        // 按地址族分流到两个字段：`p2pc_peers`（26B，IPv4，**字节级不变**）
+                        // 与 `p2pc_peers6`（38B，IPv6）。
+                        //
+                        // ⚠️ 旧实现对每条都用固定 4 字节 BlockCopy 拷地址 ——
+                        // IPv6 地址会被**静默截断成毫不相干的 IPv4 地址**，不抛异常、不记日志。
+                        // 现在改由 Bencode.SerializeCompactPeer 按地址族选格式并对未知族抛异常。
                         var ppList = new List<object>();
+                        var pp6List = new List<object>();
                         foreach (var p in peers)
                         {
-                            var entry = new byte[26];
-                            Buffer.BlockCopy(p.NodeId.ToByteArray(), 0, entry, 0, 20);
-                            var ipBytes = p.EndPoint.Address.GetAddressBytes();
-                            Buffer.BlockCopy(ipBytes, 0, entry, 20, 4);
-                            entry[24] = (byte)(p.EndPoint.Port >> 8);
-                            entry[25] = (byte)p.EndPoint.Port;
-                            ppList.Add(entry);
+                            byte[] entry;
+                            try
+                            {
+                                entry = Bencode.SerializeCompactPeer(p.NodeId.ToByteArray(), p.EndPoint);
+                            }
+                            catch (ArgumentException ex)
+                            {
+                                // 缓存里出现了本实现无法编码的地址族：跳过并留痕，
+                                // 绝不静默塞一个错的地址出去。
+                                _logger.LogWarning(ex,
+                                    "地址表条目地址族无法编码，已跳过该条目: NodeId={Peer} EndPoint={EndPoint}",
+                                    p.NodeId.ToHexString()[..8], p.EndPoint);
+                                continue;
+                            }
+
+                            if (entry.Length == Bencode.CompactPeerV6Size) pp6List.Add(entry);
+                            else ppList.Add(entry);
                         }
-                        if (ppList.Count > 0)
-                            response["p2pc_peers"] = ppList;
+                        if (ppList.Count > 0) response["p2pc_peers"] = ppList;
+                        if (pp6List.Count > 0) response["p2pc_peers6"] = pp6List;
                     }
                 }
                 break;
@@ -706,7 +730,10 @@ public class MainlineDhtService : IDhtService, IDisposable
                 if (peers is null) continue;
                 foreach (var (peerIdBytes, ip, port) in peers)
                 {
-                    if (peerIdBytes.Length != NodeId.Size) continue;
+                    // 标准 6 字节 values 不含 NodeId —— 那是「响应者的 NodeId」而非
+                    // 「该条目的 NodeId」，因此这里必须显式跳过，不能拿它当身份用。
+                    // 扩展字段（p2pc_peers / p2pc_peers6）的条目才自带真实 NodeId。
+                    if (peerIdBytes is null || peerIdBytes.Length != NodeId.Size) continue;
                     var peerId = new NodeId(peerIdBytes);
                     if (!peerId.Equals(targetId)) continue;
                     var tcpEp = new IPEndPoint(ip, port);
@@ -953,11 +980,46 @@ public class MainlineDhtService : IDhtService, IDisposable
 
     /// <summary>
     /// 将 bencode 列表的 byte[] 条目拼接成一个连续字节数组，按 <paramref name="entrySize"/> 切分。
+    /// <para>
+    /// <b>必须真的按 <paramref name="entrySize"/> 切分。</b>
+    /// 此前本方法收下 <c>entrySize</c> 却无条件调用按 26 字节切分的解析器 ——
+    /// 形参在签名里，行为里没有。6 字节的 <c>values</c> 因此被切成错位条目。
+    /// 它之所以长期没暴露，是因为那条路径的产物无论如何都过不了「NodeId 必须等于查询目标」
+    /// 那一关而被下游丢弃 —— <b>被掩盖的错位解析仍然是错位解析</b>。
+    /// </para>
     /// </summary>
-    private static List<(byte[] NodeId, IPAddress Ip, int Port)> FlattenByteList(List<object> list, int entrySize)
+    /// <exception cref="ArgumentException">
+    /// <paramref name="entrySize"/> 不是受支持的条目长度时抛出。
+    /// <b>刻意抛而不是猜</b>：猜错就是静默产出错条目，而这正是本函数要消灭的失败模式。
+    /// </exception>
+    private static List<(byte[]? NodeId, IPAddress Ip, int Port)> FlattenByteList(List<object> list, int entrySize)
+    {
+        var flat = FlattenRaw(list);
+        return entrySize switch
+        {
+            Bencode.CompactPeerV4Size => Bencode.ParseCompactPeers26(flat)
+                .Select(p => ((byte[]?)p.NodeId, p.Ip, p.Port)).ToList(),
+            Bencode.CompactPeerV6Size => Bencode.ParseCompactPeers38(flat)
+                .Select(p => ((byte[]?)p.NodeId, p.Ip, p.Port)).ToList(),
+            _ => throw new ArgumentException(
+                $"不受支持的扩展条目长度 {entrySize}；已知为 {Bencode.CompactPeerV4Size}（IPv4）或 " +
+                $"{Bencode.CompactPeerV6Size}（IPv6）。标准的 {Bencode.CompactPeerValueSize} 字节 values " +
+                "不含 NodeId，请改用 FlattenValuesList。", nameof(entrySize))
+        };
+    }
+
+    /// <summary>
+    /// 标准 <c>values</c>（6 字节，<b>不含 NodeId</b>）的拼接与解析。
+    /// 与 <see cref="FlattenByteList"/> 分开，因为它连字段布局都不同 ——
+    /// 放进同一个方法里正是当初那个被忽略的 <c>entrySize</c> 形参的来源。
+    /// </summary>
+    private static List<(byte[]? NodeId, IPAddress Ip, int Port)> FlattenValuesList(List<object> list)
+        => Bencode.ParseCompactValues6(FlattenRaw(list));
+
+    /// <summary>把 bencode list 里各条 <c>byte[]</c> 的内容按顺序拼成一个连续数组。</summary>
+    private static byte[] FlattenRaw(List<object> list)
     {
         // Bencode 把每个 byte[] 单独编码；list<object> 里每个 object 都是 byte[]。
-        // 我们按 entrySize 拼接，并按 entrySize 切块解析。
         var totalLen = 0;
         foreach (var item in list)
         {
@@ -973,7 +1035,7 @@ public class MainlineDhtService : IDhtService, IDisposable
                 offset += b.Length;
             }
         }
-        return Bencode.ParseCompactPeers26(flat);
+        return flat;
     }
 
     public void Dispose()
