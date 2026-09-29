@@ -393,8 +393,9 @@ public sealed class P2PChatTui(
         if (spaceIdx < 0) { AddSystemMessage("用法: /msg <联系人|节点ID> <消息>"); return; }
         var target = args[..spaceIdx];
         var text = args[(spaceIdx + 1)..];
-        var contact = FindContact(target);
-        if (contact == null) { AddSystemMessage($"未找到联系人: {target}"); return; }
+        var resolution = ResolveContact(target);
+        if (!resolution.Found) { ReportContactLookupFailure(target, resolution); return; }
+        var contact = resolution.Match!;
         await chatService.SendPrivateMessageAsync(contact.NodeId, text);
         _currentPeerId = contact.NodeId;
         _currentConversationId = PrivateConversationKey(contact.NodeId);
@@ -442,11 +443,11 @@ public sealed class P2PChatTui(
         if (spaceIdx < 0) { AddSystemMessage("用法: /file send <联系人> <文件路径>"); return; }
         var target = args[..spaceIdx];
         var filePath = args[(spaceIdx + 1)..];
-        var contact = FindContact(target);
-        if (contact == null) { AddSystemMessage($"未找到联系人: {target}"); return; }
+        var contact = ResolveContact(target);
+        if (!contact.Found) { ReportContactLookupFailure(target, contact); return; }
         try
         {
-            var transferId = await fileTransferService.SendOfferAsync(contact.NodeId, filePath);
+            var transferId = await fileTransferService.SendOfferAsync(contact.Match!.NodeId, filePath);
             AddSystemMessage($"文件Offer已发送: {Path.GetFileName(filePath)} (传输ID: {Short(transferId)})");
         }
         catch (Exception ex) { AddSystemMessage($"发送文件失败: {ex.Message}"); }
@@ -944,9 +945,38 @@ public sealed class P2PChatTui(
         AddSystemMessage("快捷键: F1=帮助 F2=添加联系人 F3=新建群组 F10=退出 Tab=切换联系人 PgUp/PgDn=滚动聊天");
         AddSystemMessage("P2PChat v1.1 - 基于Kademlia DHT的P2P聊天软件 (.NET 11 / 自绘控制台UI / AES-256-GCM)");
     }
-    private Contact? FindContact(string target) => _contacts.FirstOrDefault(c =>
-        c.Alias.Equals(target, StringComparison.OrdinalIgnoreCase) ||
-        c.NodeId.ToHexString().StartsWith(target, StringComparison.OrdinalIgnoreCase));
+    /// <summary>
+    /// 解析失败时的提示：区分「没找到」与「有歧义」，后者列出候选让用户多打几个字符。
+    /// <para>
+    /// <b>不要在这里编造「多长才安全」的数字</b> —— 碰撞成本随前缀变短而**指数下降**，
+    /// 但那是量级判断；没有实测依据就写一个具体位数，只会变成一条看起来权威、实则可能过期的断言。
+    /// 给出候选本身更有用：多打几位就能消除歧义。
+    /// </para>
+    /// </summary>
+    private void ReportContactLookupFailure(string target, Core.Extensions.ContactResolver.Resolution resolution)
+    {
+        if (!resolution.Ambiguous)
+        {
+            AddSystemMessage($"未找到联系人: {target}");
+            return;
+        }
+
+        AddSystemMessage($"「{target}」匹配到 {resolution.Candidates.Count} 个联系人，已取消发送——不会替你猜。");
+        foreach (var c in resolution.Candidates.Take(8))
+            AddSystemMessage($"    {Short(c.NodeId.ToHexString(), 8)}  {c.Alias}  {c.EndPoint}");
+        if (resolution.Candidates.Count > 8)
+            AddSystemMessage($"    …… 另有 {resolution.Candidates.Count - 8} 个");
+        AddSystemMessage("  请改用完整节点 ID，或用对方的别名（别名精确匹配不受此限制）。");
+    }
+
+    /// <summary>
+    /// 解析逻辑在 <see cref="Core.Extensions.ContactResolver"/>（Core 里的唯一实现）——
+    /// <b>本文件不得再写一份</b>。它此前是这里的一个私有 <c>FirstOrDefault</c>，
+    /// 而没有任何测试项目引用 <c>P2PChat.UI</c>，所以它既无行为测试、也无法在不新增程序集
+    /// 依赖的前提下补上；理由与规则见该类型的文档。
+    /// </summary>
+    private Core.Extensions.ContactResolver.Resolution ResolveContact(string target)
+        => Core.Extensions.ContactResolver.Resolve(_contacts, target);
 
     private async Task<IReadOnlyList<Contact>> RefreshContactsAsync(CancellationToken ct = default)
     {
