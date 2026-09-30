@@ -263,11 +263,32 @@ public class MainlineDhtService : IDhtService, IDisposable
     {
         ArgumentNullException.ThrowIfNull(node);
 
-        _staticPeers[node.NodeId.ToHexString()] = node;
+        var key = node.NodeId.ToHexString();
+
+        // ── 冲突时**保留已登记的端点**，不覆盖 ─────────────────────────────────
+        // 这条约束此前只写在 KeyExchangeHandler 的 XML 文档里（「不得覆盖已存在的条目」，
+        // 且注明「一条都不能省」），而这里原本是 `_staticPeers[key] = node` 无条件覆盖 ——
+        // 即**注释声称的保证在当前路径上并不成立**。
+        //
+        // 为什么旧值更可信：静态对端表有两种来源，可信度不对等。
+        //   · 手工登记（contacts.json、/add）：用户带外的主动输入，攻击者拿不到。
+        //   · 自报端点（KeyExchangeHandler 的反向登记）：对端在签名覆盖的载荷里**自述**。
+        //     签名只能证明「这话是它说的」，**无法判定它有没有撒谎**。
+        // 因此冲突时以已登记的为准，并把差异显式记 LogWarning —— 静默丢弃等于让用户
+        // 永远不知道自己登记的端点被谁顶掉了。
+        if (_staticPeers.TryGetValue(key, out var existing) && !Equals(existing.EndPoint, node.EndPoint))
+        {
+            _logger.LogWarning(
+                "静态对端端点冲突，已保留已登记的端点（不覆盖）: NodeId={NodeId} Existing={Existing} New={New}",
+                key[..8], existing.EndPoint, node.EndPoint);
+            return;
+        }
+
+        _staticPeers[key] = node;
         // 同时入路由表，使 find_node 应答能把该对端报给其他节点（提升整体可发现性）。
         _routingTable.AddOrUpdate(node);
         _logger.LogInformation("登记静态对端: {NodeId} @ {EndPoint}",
-            node.NodeId.ToHexString()[..8], node.EndPoint);
+            key[..8], node.EndPoint);
     }
 
     /// <inheritdoc />

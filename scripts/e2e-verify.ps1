@@ -438,20 +438,6 @@ try {
         #   PowerShell 坑位：`@(...) | ConvertTo-Json` 会在单元素时**塌缩**成对象；
         #   而 `-InputObject @(...) -AsArray` 会**多包一层**变成嵌套数组。正确写法是
         #   `-InputObject @(...)` 且**不加** -AsArray。
-        $contactsFile = Join-Path $dataDirA2 'contacts.json'
-        if (Test-Path -LiteralPath $dataDirA2) { Remove-Item -LiteralPath $dataDirA2 -Recurse -Force }
-        New-Item -ItemType Directory -Path $dataDirA2 -Force | Out-Null
-        $contactsJson = ConvertTo-Json -InputObject @(
-            @{
-                NodeId  = $idB
-                Alias   = 'nodeB'
-                EndPoint = "127.0.0.1:$NodeBTcpPort"
-                AddedAt = (Get-Date).ToUniversalTime().ToString('o')
-            }
-        ) -Depth 5
-        Set-Content -LiteralPath $contactsFile -Value $contactsJson -Encoding UTF8
-
-        # 启动 Phase 2：PLAIN=1（强制 TUI 走线性输出模式，逐行写入 stdout），不启用 SELFTEST
         $envA2 = @{
             'P2PCHAT_DATA_DIR'         = $dataDirA2
             'P2PCHAT_P2PChat__UdpPort' = "$NodeAUdpPort"
@@ -464,10 +450,44 @@ try {
             'P2PCHAT_P2PChat__TcpPort' = "$NodeBTcpPort"
             'P2PCHAT_PLAIN'            = '1'
         }
+
+        # ⚠️ 必须**先起 nodeB2**，因为 contacts.json 需要 nodeB2 的**真实** NodeId。
+        #
+        # 历史事故（导致 A30/A31/A33/A34 全部 FAIL 的真根因）：
+        #   这里原先写的是 `$idB` —— 那是 **Phase 1** 的 nodeB 的 NodeId。
+        #   但 Phase 2 用的是全新数据目录 dataB2，nodeB2 因此持有**另一个身份**。
+        #   于是 A2 拿着**过期的 NodeId** 去拨 127.0.0.1:$NodeBTcpPort（端口对、身份错），
+        #   密钥交换应答里的 SenderId 与拨号目标不符，被「响应身份必须等于拨号目标」
+        #   关卡正确拒绝（`密钥交换响应来自非预期节点`）。
+        #   **那是防护在生效，不是产品回归** —— 错的是 e2e 的 fixture。
+        $nodeB2 = Start-P2PNode -Name 'nodeB2' -DataDir $dataDirB2 -RunDir $runDirB2 -EnvVars $envB2
+
+        $b2ListenReady = Wait-Until -TimeoutSeconds 25 -Condition {
+            (Read-NodeLog -DataDir $dataDirB2) -match "TCP监听已启动: 0\.0\.0\.0:$NodeBTcpPort"
+        }
+        # nodeB2 的真实 NodeId，取自它自己的启动日志 `本地节点ID: {NodeId}`（Program.cs:201）。
+        # 为什么不用 stdout：Phase 2 **不开 SELFTEST**，自检块（`节点ID:` 行）根本不打印；
+        # 而 `e2e.stdout.txt` 是 `Get-NodeOutput` 写的，那要等进程被杀之后 —— 此刻不可用。
+        # 日志文件是此处唯一可行、且已在 A35 静态校验中验证过的来源。
+        $idB2 = Get-Field -Text (Read-NodeLog -DataDir $dataDirB2) -Pattern '本地节点ID:\s+([0-9a-f]{40})'
+        Write-Host ("    -> nodeB2 真实 NodeId: {0}（TCP 就绪={1}）" -f $idB2, $b2ListenReady) -ForegroundColor $(if ($idB2) { 'Green' } else { 'Red' })
+
+        $contactsFile = Join-Path $dataDirA2 'contacts.json'
+        if (Test-Path -LiteralPath $dataDirA2) { Remove-Item -LiteralPath $dataDirA2 -Recurse -Force }
+        New-Item -ItemType Directory -Path $dataDirA2 -Force | Out-Null
+        $contactsJson = ConvertTo-Json -InputObject @(
+            @{
+                NodeId  = $idB2          # ← nodeB2 的**真实** NodeId，不是 Phase 1 的 $idB
+                Alias   = 'nodeB'
+                EndPoint = "127.0.0.1:$NodeBTcpPort"
+                AddedAt = (Get-Date).ToUniversalTime().ToString('o')
+            }
+        ) -Depth 5
+        Set-Content -LiteralPath $contactsFile -Value $contactsJson -Encoding UTF8
+
         # PreserveDataDir：contacts.json 已在上面预置好，绝不能被 Start-P2PNode 删掉
         # （历史事故：Phase 2 一直以「零联系人」启动，/msg nodeB 静默失败）
         $nodeA2 = Start-P2PNode -Name 'nodeA2' -DataDir $dataDirA2 -RunDir $runDirA2 -EnvVars $envA2 -PreserveDataDir
-        $nodeB2 = Start-P2PNode -Name 'nodeB2' -DataDir $dataDirB2 -RunDir $runDirB2 -EnvVars $envB2
 
         # 预置是否真的留下来了 —— 少了它后面必然失败，而失败是静默的
         $contactsSurvived = Test-Path -LiteralPath $contactsFile
@@ -616,79 +636,93 @@ try {
 
         # ---- (A35) 场景三：/connect 双向 —— 应答侧靠「反向登记」反向发话 -----------
         # 设计要点（每一条都为了让消息**只可能**经由反向登记送达）：
-        #   * **nodeB2 是发起方**、nodeA2 是**应答侧**。只有应答侧才会走
-        #     KeyExchangeHandler.RegisterInboundPeer（发起方走 P2PChatTui 的
-        #     RegisterStaticPeer，那是另一条路径，不能证明反向登记）。
-        #   * nodeB2 没有任何联系人 ⇒ 端点身份连续性检查是 FirstContact
-        #     （P2PChatTui.cs:757-766 的 KnownEndpointIdentities 只看 GetAllKnownNodes
-        #      且要求 PublicKey 非空），不会因端点冲突要求 --force。
-        #   * nodeA2 补联系人的 `/add` **故意不带 ip:port** ⇒
+        #   * **nodeA2 是发起方**、**nodeB2 是应答侧**。只有应答侧才会走
+        #     KeyExchangeHandler.RegisterInboundPeer；发起方走的是 P2PChatTui 里的
+        #     RegisterStaticPeer，那是另一条路径，证明不了反向登记。
+        #   * ⚠️ 方向是被 fixture 修复**逼出来**的：一旦 contacts.json 改用 nodeB2 的
+        #     真实 NodeId，Program.cs:280 的 RegisterStaticPeersFromContacts 就会在
+        #     **nodeA2 启动时**把「nodeB2真实NodeId @ 127.0.0.1:$NodeBTcpPort」写进
+        #     nodeA2 的静态对端表。若仍让 nodeA2 去 `/add`+`/msg` nodeB2，这条启动期
+        #     静态对端会**直接满足**它的寻址，A35 就变成了假绿灯。
+        #     换成 nodeB2 当应答侧后，nodeB2 侧的三条知识来源全部为空：
+        #       ① 联系人表：dataB2 全新，没预置任何 contacts.json；
+        #       ② 发起路径：nodeB2 全程没有发起过 /connect；
+        #       ③ DHT 路由表：Phase 2 不配 BootstrapNodes，路由表只有 LocalNode。
+        #     ⇒ nodeB2 知道 nodeA2 在哪，**只可能**来自反向登记。
+        #   * nodeB2 补联系人的 `/add` **故意不带 ip:port** ⇒
         #     ContactService.AddContactAsync 收到 endPoint=null（ContactService.cs:41-56），
-        #     且走 P2PChatTui.cs:506-511 的 else 分支，**不调用 RegisterStaticPeer**。
-        #     这条联系人**不携带任何端点**，所以 nodeA2 唯一能知道 nodeB2 在哪的地方，
-        #     就是那条反向登记 —— 这正是本断言要证明的东西。
-        #   * 按 nodeB2 的**真实** NodeId 寻址，而不是 Phase 1 预置进 contacts.json 的
-        #     旧 NodeId（dataB2 是全新目录，nodeB2 ≠ Phase 1 的 nodeB）；用旧 NodeId
-        #     会命中那条陈旧静态对端，证明力会被污染。
+        #     且走 P2PChatTui.cs:506-511 的 else 分支，**不调用 RegisterStaticPeer**，
+        #     这条联系人不携带任何端点。
+        #   * nodeA2 发起 /connect **不会**撞上 --force：contacts 派生的静态对端
+        #     PublicKey=null（P2PChatTui.cs:498 / Program.cs:395 的既定契约），
+        #     而 KnownEndpointIdentities 只取 PublicKey 非空的条目（:757-758），
+        #     所以那条 pin 不参与身份连续性判定。
         #   * 反向登记的端点来自**对端自报**的 SenderListenEndPoint = LocalNode.EndPoint
         #     = GetLocalIPAddress() 的**局域网地址** + TCP 监听端口（Program.cs:117-121），
         #     **不是 127.0.0.1** ⇒ 断言只锚定**端口**，不锚定 IP。
         $revText = "REVERSE-E2E-$([guid]::NewGuid().ToString('N').Substring(0,8))"
-        $cmdConnect = "/connect 127.0.0.1:$NodeATcpPort"
+        $cmdConnect = "/connect 127.0.0.1:$NodeBTcpPort"
         foreach ($c in $cmdConnect.ToCharArray()) {
-            $nodeB2.Proc.StandardInput.Write($c)
+            $nodeA2.Proc.StandardInput.Write($c)
             Start-Sleep -Milliseconds 30
         }
-        $nodeB2.Proc.StandardInput.Write("`n")
-        $nodeB2.Proc.StandardInput.Flush()
+        $nodeA2.Proc.StandardInput.Write("`n")
+        $nodeA2.Proc.StandardInput.Flush()
 
-        # nodeA2 侧的反向登记日志（KeyExchangeHandler.cs:348-351）：
-        #   已登记反向可达的对端（对方 /connect 而来，监听端点由对方自报且已被签名覆盖）: Peer=xxxxxxxx @ <ip>:<port>
-        $revRegRe = '已登记反向可达的对端[^\r\n]*@\s*\S+:' + $NodeBTcpPort + '(?!\d)'
+        # nodeA2 侧：/connect 真正完成（发起方独有，应答侧不会有这行）
+        #   P2PChatTui.cs:691  "/connect 成功: peer {Peer} @ {EndPoint}"
         $swRev = [System.Diagnostics.Stopwatch]::StartNew()
-        $reverseRegistered = Wait-Until -TimeoutSeconds 30 -IntervalMs 500 -Condition {
-            (Read-NodeLog -DataDir $dataDirA2) -match $revRegRe
+        $connectSucceeded = Wait-Until -TimeoutSeconds 30 -IntervalMs 500 -Condition {
+            (Read-NodeLog -DataDir $dataDirA2) -match '/connect 成功:'
         }
-        Write-Host ("    -> nodeA2 反向登记 nodeB2: {0}（耗时 {1}s）" -f $reverseRegistered, [math]::Round($swRev.Elapsed.TotalSeconds,1)) -ForegroundColor $(if ($reverseRegistered) { 'Green' } else { 'Red' })
+        Write-Host ("    -> nodeA2 /connect nodeB2 成功: {0}（耗时 {1}s）" -f $connectSucceeded, [math]::Round($swRev.Elapsed.TotalSeconds,1)) -ForegroundColor $(if ($connectSucceeded) { 'Green' } else { 'Red' })
 
-        # nodeB2 的真实 NodeId（来自它自己的启动日志「本地节点ID」，Program.cs:201）
-        $b2NodeId = Get-Field -Text (Read-NodeLog -DataDir $dataDirB2) -Pattern '本地节点ID:\s+([0-9a-f]{40})'
+        # nodeB2（应答侧）的反向登记日志（KeyExchangeHandler.cs:348-351）：
+        #   已登记反向可达的对端（对方 /connect 而来，监听端点由对方自报且已被签名覆盖）: Peer=xxxxxxxx @ <ip>:<port>
+        # 注：这行也可能更早由 A30 的密钥交换触发（ChatService.cs:152 同样自报端点），
+        #     走的是同一个 RegisterInbound —— 所以它是**佐证**，主证据是下面的事件行。
+        $revRegRe = '已登记反向可达的对端[^\r\n]*@\s*\S+:' + $NodeATcpPort + '(?!\d)'
+        $reverseRegistered = (Read-NodeLog -DataDir $dataDirB2) -match $revRegRe
+        Write-Host ("    -> nodeB2 反向登记 nodeA2: $reverseRegistered" ) -ForegroundColor $(if ($reverseRegistered) { 'Green' } else { 'Red' })
+
+        # nodeA2 的真实 NodeId（取自它自己的启动日志，Program.cs:201）
+        $a2NodeId = Get-Field -Text (Read-NodeLog -DataDir $dataDirA2) -Pattern '本地节点ID:\s+([0-9a-f]{40})'
 
         $reverseSent = $false
         $reverseDelivered = $false
-        if ($reverseRegistered -and $b2NodeId) {
+        if ($connectSucceeded -and $a2NodeId) {
             # 步骤 1：只补**身份**，不补端点（见上方要点）
-            $cmdAdd = "/add $b2NodeId peerB2rev"
+            $cmdAdd = "/add $a2NodeId peerA2rev"
             foreach ($c in $cmdAdd.ToCharArray()) {
-                $nodeA2.Proc.StandardInput.Write($c)
+                $nodeB2.Proc.StandardInput.Write($c)
                 Start-Sleep -Milliseconds 30
             }
-            $nodeA2.Proc.StandardInput.Write("`n")
-            $nodeA2.Proc.StandardInput.Flush()
+            $nodeB2.Proc.StandardInput.Write("`n")
+            $nodeB2.Proc.StandardInput.Flush()
 
             # 等 /add 真正落盘再发消息（ContactService.cs:52 的日志），避免抢跑
             $addOk = Wait-Until -TimeoutSeconds 15 -Condition {
-                (Read-NodeLog -DataDir $dataDirA2) -match '添加联系人:\s*peerB2rev\s*\('
+                (Read-NodeLog -DataDir $dataDirB2) -match '添加联系人:\s*peerA2rev\s*\('
             }
 
             # 步骤 2：按真实 NodeId 发消息 —— 端点只能来自反向登记
-            $cmdRev = "/msg peerB2rev $revText"
+            $cmdRev = "/msg peerA2rev $revText"
             foreach ($c in $cmdRev.ToCharArray()) {
-                $nodeA2.Proc.StandardInput.Write($c)
+                $nodeB2.Proc.StandardInput.Write($c)
                 Start-Sleep -Milliseconds 30
             }
-            $nodeA2.Proc.StandardInput.Write("`n")
-            $nodeA2.Proc.StandardInput.Flush()
+            $nodeB2.Proc.StandardInput.Write("`n")
+            $nodeB2.Proc.StandardInput.Flush()
             $reverseSent = $addOk
 
             $revSeenRe = '私聊消息已处理:[^\r\n]*' + [regex]::Escape($revText)
             $swRev2 = [System.Diagnostics.Stopwatch]::StartNew()
             $reverseDelivered = Wait-Until -TimeoutSeconds 30 -IntervalMs 500 -Condition {
-                (Read-NodeLog -DataDir $dataDirB2) -match $revSeenRe
+                (Read-NodeLog -DataDir $dataDirA2) -match $revSeenRe
             }
-            Write-Host ("    -> nodeB2 收到反向消息: {0}（耗时 {1}s）" -f $reverseDelivered, [math]::Round($swRev2.Elapsed.TotalSeconds,1)) -ForegroundColor $(if ($reverseDelivered) { 'Green' } else { 'Red' })
+            Write-Host ("    -> nodeA2 收到反向消息: {0}（耗时 {1}s）" -f $reverseDelivered, [math]::Round($swRev2.Elapsed.TotalSeconds,1)) -ForegroundColor $(if ($reverseDelivered) { 'Green' } else { 'Red' })
         } else {
-            Write-Host "    -> 跳过反向发话（反向登记或 nodeB2 NodeId 未取到）" -ForegroundColor Yellow
+            Write-Host "    -> 跳过反向发话（/connect 未成功或 nodeA2 NodeId 未取到）" -ForegroundColor Yellow
         }
 
         # 关掉 Phase 2 实例（让 stdout/stderr 关闭以便 Get-NodeOutput 完成）
@@ -751,16 +785,16 @@ try {
             "期望事件行>=2，实际=$($b2EventLines.Count)；$b2EventEv"
 
         # ---- (A35) 断言：应答侧靠「反向登记」反向发话 ------------------------------
-        # 纪律：断言的是 **nodeB2 的聊天事件行**（DrainInbox 逐行 flush 到 stdout 的
+        # 纪律：断言的是 **nodeA2 的聊天事件行**（DrainInbox 逐行 flush 到 stdout 的
         # `[cid] [HH:mm] 发件人: 正文`），**不是** Serilog 的 `私聊消息已处理: … -> 明文`
         # 日志行 —— 后者本身就含明文，A30/A31 曾被它满足，那是假绿灯。
-        $b2RevEventLines = @($outB2.Combined -split "`r?`n" |
+        $a2RevEventLines = @($outA2.Combined -split "`r?`n" |
             Where-Object { $_ -match [regex]::Escape($revText) -and $_ -match $eventLineRe })
-        $b2RevLogLines = @($outB2.Combined -split "`r?`n" |
+        $a2RevLogLines = @($outA2.Combined -split "`r?`n" |
             Where-Object { $_ -match [regex]::Escape($revText) -and $_ -match '私聊消息已处理' })
-        Add-Result 'A35' 'Phase 2：nodeA2 作为 /connect 应答侧，经「反向登记」把消息回传给 nodeB2（证明 B 知道 A 在哪，而不只是消息能通）' `
-            $(if ($reverseRegistered -and $b2RevEventLines.Count -ge 1) { 'PASS' } else { 'FAIL' }) `
-            ("反向登记日志=$reverseRegistered 已发送=$reverseSent nodeB2已处理=$reverseDelivered b2NodeId=$b2NodeId 聊天事件行=$($b2RevEventLines.Count) (仅日志行=$($b2RevLogLines.Count)) 样本: " + $(if ($b2RevEventLines.Count -gt 0) { $b2RevEventLines[0] } else { '(无聊天事件行 —— 这是真失败，不是日志行冒充)' }))
+        Add-Result 'A35' 'Phase 2：nodeB2 作为 /connect 应答侧，经「反向登记」把消息回传给 nodeA2（证明 B 知道 A 在哪，而不只是消息能通）' `
+            $(if ($reverseRegistered -and $connectSucceeded -and $a2RevEventLines.Count -ge 1) { 'PASS' } else { 'FAIL' }) `
+            ("connect成功=$connectSucceeded 反向登记日志=$reverseRegistered 已发送=$reverseSent nodeA2已处理=$reverseDelivered a2NodeId=$a2NodeId 聊天事件行=$($a2RevEventLines.Count) (仅日志行=$($a2RevLogLines.Count)) 样本: " + $(if ($a2RevEventLines.Count -gt 0) { $a2RevEventLines[0] } else { '(无聊天事件行 —— 这是真失败，不是日志行冒充)' }))
 
         # 收集 Phase 2 关键日志供末尾摘要使用
         $outA.Combined += "`n" + $outA2.Combined
