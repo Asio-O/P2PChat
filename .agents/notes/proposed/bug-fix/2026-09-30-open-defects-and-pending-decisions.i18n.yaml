@@ -1,0 +1,32 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/proposed/bug-fix/2026-09-30-open-defects-and-pending-decisions.md
+  zh: notes/proposed/bug-fix/2026-09-30-open-defects-and-pending-decisions.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: Open items in NAT reverse registration, IPv6 transport, and the group key-probe path"
+    status: "Status: proposed"
+    sections:
+      - Problem
+      - Proposal
+      - Alternatives considered
+      - Acceptance criteria
+      - Risks
+      - Related
+    tokens: []
+  zh:
+    heading: "# Agent Note: NAT 反向登记、IPv6 传输层与群公钥探测路径上的开放项"
+    status: "Status: proposed"
+    sections:
+      - Problem
+      - Proposal
+      - Alternatives considered
+      - Acceptance criteria
+      - Risks
+      - Related
+    tokens: []
+
+recorded: 2026-09-30

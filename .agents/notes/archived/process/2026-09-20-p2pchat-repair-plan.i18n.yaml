@@ -49,3 +49,12 @@ recorded: 2026-09-29
 #
 # 3. **不要**校验本 Note 的**出站**链接：文件内部大量 `[HANDOFF.md](HANDOFF.md)` 形式的
 #    相对链接，在两个文件被移进同一目录后已不再解析。归档规则明令**永不**修复出站链接。
+#
+# 4. **本文件第 8 行指向的「根目录 `HANDOFF.md`」已于 2026-09-30 删除**（用户裁定
+#    「以后统一用 Agent Note」）。接替它的活文档随后也被删除，其内容分流到：
+#    门禁数值（只活在 commit message 里，规则见
+#    `implemented/process/2026-09-29-gate-discipline-and-measured-numbers`）、
+#    残余风险与注释纪律（已完整覆盖于 `Agent.md`）、开放项
+#    （`proposed/bug-fix/2026-09-30-open-defects-and-pending-decisions`）。
+#    ⚠️ **第 8 行本身按归档规则不得修改**（「不要修复出站链接」），
+#    故这处失效指针只能在此 sidecar 记录 —— 归档制品对**当下**失准是它的固有属性。

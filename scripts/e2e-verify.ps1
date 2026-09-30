@@ -544,8 +544,9 @@ try {
         # 修法与 A35 段保持一致：取 nodeB2 的**真实** NodeId 再寻址。
         # **别名刻意用 nodeB2live 而不是复用 nodeB** —— 预置那条 stale 联系人仍在 contacts.json 里，
         # 同名会让 FindContact 的别名匹配 FirstOrDefault 取到 stale 那条。
-        # ⚠️ **该前缀歧义本身是另一条仍开放的缺陷，登记在根 `HANDOFF.md` §2 开放项**；
-        # 本段只是因此**必须**用不同别名绕开它 —— 两者不要混为一谈。
+        # ⚠️ **同名前缀歧义本身是另一条缺陷**（`FindContact` 的短 hex 前缀多命中）——
+        #   见 `implemented/bug-fix/2026-09-29-contact-lookup-ambiguity`；
+        #   本段只是因此**必须**用不同别名绕开它 —— 两者不要混为一谈。
         #
         #
         # ⚠️ **必须等，不能用固定 sleep**：`本地节点ID` 是在 UPnP 探测**之后**才写的，
