@@ -360,32 +360,5 @@ public class KeyExchangeIdentityTests
     }
 
     // ---------------------------------------------------------------- 夹具
-
-    /// <summary>
-    /// 捕获日志的 <see cref="ILogger{TCategoryName}"/>，用于断言「拒绝这件事在日志里可查」。
-    /// <para>
-    /// 刻意用泛型版：<c>MessageRouter</c> 与 <c>KeyExchangeHandler</c> 的构造函数都要求
-    /// <c>ILogger&lt;T&gt;</c>，非泛型 <see cref="ILogger"/> 塞不进去。
-    /// </para>
-    /// </summary>
-    private sealed class RecordingLogger<T> : ILogger<T>
-    {
-        private readonly List<(LogLevel, string)> _shared;
-
-        public RecordingLogger() : this([]) { }
-
-        public RecordingLogger(List<(LogLevel, string)> shared) => _shared = shared;
-
-        public List<(LogLevel Level, string Message)> Entries => _shared;
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
-            Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            lock (_shared) _shared.Add((logLevel, formatter(state, exception)));
-        }
-    }
+    // 日志替身 RecordingLogger<T> 已移入 Support/TestDoubles.cs，与 StaticPeerRegistrationTests 共用。
 }

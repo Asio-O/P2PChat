@@ -13,6 +13,39 @@ using P2PChat.Core.Extensions;
 namespace P2PChat.Chat.Tests.Support;
 
 /// <summary>
+/// 捕获日志的 <see cref="ILogger{TCategoryName}"/> 测试替身。
+/// <para>
+/// <b>可共享 Entries</b>：多个不同类别的 logger 指向同一份列表时，一次断言就能同时看到
+/// 「路由器记的那条」与「处理器记的那些」；各用独立实例则各记各的。
+/// </para>
+/// <para>
+/// 刻意用<b>泛型</b>版：<c>MessageRouter</c> / <c>KeyExchangeHandler</c> /
+/// <c>MainlineDhtService</c> 的构造函数都要求 <c>ILogger&lt;T&gt;</c>，
+/// 非泛型 <see cref="ILogger"/> 塞不进去。
+/// </para>
+/// </summary>
+public sealed class RecordingLogger<T> : ILogger<T>
+{
+    private readonly List<(LogLevel, string)> _shared;
+
+    public RecordingLogger() : this([]) { }
+
+    public RecordingLogger(List<(LogLevel, string)> shared) => _shared = shared;
+
+    public List<(LogLevel Level, string Message)> Entries => _shared;
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+        Exception? exception, Func<TState, Exception?, string> formatter)
+    {
+        lock (_shared) _shared.Add((logLevel, formatter(state, exception)));
+    }
+}
+
+/// <summary>
 /// 事件捕获器 —— <see cref="IChatEventPublisher"/> 的测试替身，记录 handler 投递出来的每一条聊天事件。
 /// <para>
 /// <b>为什么 Chat.Tests 与 Integration.Tests 各有一份同名类</b>：两个测试项目之间<b>没有</b>
@@ -203,7 +236,18 @@ public sealed class StubDhtService : IDhtService
         return Task.FromResult(_nodes.TryGetValue(targetId.ToHexString(), out var n) ? n : null);
     }
 
-    public void RegisterStaticPeer(NodeInfo node) => _nodes[node.NodeId.ToHexString()] = node;
+    /// <summary>
+    /// 与 <c>MainlineDhtService.RegisterStaticPeer</c> **同一契约**：同一 NodeId 端点不一致时
+    /// 保留先登记的端点，不覆盖（手工登记是用户带外输入，自报端点是对端自述，后者不可信）。
+    /// 替身若与产品语义不一致，集成测试跑的就是另一个世界。
+    /// </summary>
+    public void RegisterStaticPeer(NodeInfo node)
+    {
+        var key = node.NodeId.ToHexString();
+        if (_nodes.TryGetValue(key, out var existing) && !Equals(existing.EndPoint, node.EndPoint))
+            return;
+        _nodes[key] = node;
+    }
 
     public Task StoreAsync(byte[] key, byte[] value, CancellationToken ct = default) => Task.CompletedTask;
 

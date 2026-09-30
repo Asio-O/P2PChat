@@ -37,6 +37,13 @@ public class ChatServiceTests
         NodeInfo Peer);
 
     /// <param name="peerDiscoverable">对端是否已在 DHT 中登记；false 模拟"目标节点未找到"。</param>
+    /// <summary>
+    /// 造一个真实的 <see cref="MessageReplayGuard"/>（默认 1h/5min 窗口）。
+    /// 刻意不用「永远放行」的替身：那等于测试环境里根本没有重放防护。
+    /// </summary>
+    private static IReplayGuard NewReplayGuard()
+        => new MessageReplayGuard(NullLogger<MessageReplayGuard>.Instance);
+
     private static Harness Build(bool peerDiscoverable = true)
     {
         var crypto = new AesGcmEncryptionService(NullLogger<AesGcmEncryptionService>.Instance);
@@ -54,7 +61,7 @@ public class ChatServiceTests
         var dht = new StubDhtService(local);
         if (peerDiscoverable) dht.Register(peer);
         var router = new RecordingMessageRouter();
-        var service = new ChatService(dht, router, crypto, keyStore, NullLogger<ChatService>.Instance);
+        var service = new ChatService(dht, router, crypto, keyStore, NewReplayGuard(), NullLogger<ChatService>.Instance);
 
         return new Harness(service, router, dht, keyStore, crypto, identity, local, peer);
     }
@@ -244,7 +251,7 @@ public class ChatServiceTests
         };
         transport.ConnectionFactory = _ => link;
 
-        var service = new ChatService(dht, router, crypto, localKs, NullLogger<ChatService>.Instance);
+        var service = new ChatService(dht, router, crypto, localKs, NewReplayGuard(), NullLogger<ChatService>.Instance);
 
         await service.SendPrivateMessageAsync(peer.NodeId, "首次通信");
 
@@ -271,42 +278,53 @@ public class ChatServiceTests
         var h = Build();
         var link = (FakeTcpConnection)h.Router.Connection;
 
+        // 密钥交换响应现在必须**验签通过**才能被采用（ChatService 有一条不走路由器的读路径，
+        // 历史上完全不验签 —— 那是本项目最后一个代码级安全缺口）。
+        // 因此这里的「对端」必须是一把真实 P-256 密钥对：只有这样才能签出
+        // NodeId 与公钥自洽、且 SenderId 等于我方拨号目标的响应信封。
+        var peerKeys = h.Crypto.GenerateKeyPair();
+        var signedPeer = TestNodes.RealKeyPairNode(peerKeys, port: 45050);
+        h.Dht.Register(signedPeer);   // 换成可验签的对端后必须重新登记，否则 FindNodeAsync 命中不到
+
         // 1) 先排入一条私聊文本信封（非密钥交换）
         var aheadText = new TextMessage
         {
-            SenderId = h.Peer.NodeId.ToByteArray(),
-            ConversationId = ConversationId.ForPrivate(h.Local.NodeId, h.Peer.NodeId),
+            SenderId = signedPeer.NodeId.ToByteArray(),
+            ConversationId = ConversationId.ForPrivate(h.Local.NodeId, signedPeer.NodeId),
             Content = Convert.ToBase64String(h.Crypto.Encrypt(Encoding.UTF8.GetBytes("插队"), new byte[32])),
             IsGroup = false
         };
         link.Enqueue(MessageRouter.SerializeEnvelope(new MessageEnvelope
         {
             MessageType = MessageType.PrivateText,
-            SenderId = h.Peer.NodeId.ToByteArray(),
+            SenderId = signedPeer.NodeId.ToByteArray(),
             Payload = Wire.Serialize<Message>(aheadText)
         }));
 
-        // 2) 再排入真正的密钥交换响应
+        // 2) 再排入真正的密钥交换响应（**已用对端私钥签名**）
         var responderEphemeral = h.Crypto.GenerateKeyPair();
-        link.Enqueue(MessageRouter.SerializeEnvelope(new MessageEnvelope
+        var responseEnvelope = new MessageEnvelope
         {
             MessageType = MessageType.KeyExchange,
-            SenderId = h.Peer.NodeId.ToByteArray(),
+            SenderId = signedPeer.NodeId.ToByteArray(),
+            SenderPublicKey = peerKeys.PublicKey,
             Payload = Wire.Serialize<Message>(new KeyExchangeMessage
             {
-                SenderId = h.Peer.NodeId.ToByteArray(),
-                ConversationId = h.Peer.NodeId.ToHexString(),
+                SenderId = signedPeer.NodeId.ToByteArray(),
+                ConversationId = signedPeer.NodeId.ToHexString(),
                 EphemeralPublicKey = responderEphemeral.PublicKey,
                 IsResponse = true
             })
-        }));
+        };
+        link.Enqueue(MessageRouter.SerializeEnvelope(
+            MessageRouter.SignEnvelope(responseEnvelope, peerKeys, h.Crypto)));
 
-        await h.Service.SendPrivateMessageAsync(h.Peer.NodeId, "握手后正式消息");
+        await h.Service.SendPrivateMessageAsync(signedPeer.NodeId, "握手后正式消息");
 
         h.Router.RoutedIn.Count.ShouldBe(1, "插队的普通消息必须先交回正常路由，而不是被吞掉");
         h.Router.RoutedIn[0].MessageType.ShouldBe(MessageType.PrivateText);
         SingleText(h.Router).Content.ShouldNotBeNullOrEmpty("拿到响应后应继续完成本次发送");
-        h.KeyStore.GetSessionKey(h.Peer.NodeId)!.Length.ShouldBe(32);
+        h.KeyStore.GetSessionKey(signedPeer.NodeId)!.Length.ShouldBe(32);
     }
 
     [Fact]
@@ -325,16 +343,20 @@ public class ChatServiceTests
             EndPoint = new IPEndPoint(IPAddress.Loopback, 45021),
             PublicKey = identity.PublicKey
         };
-        var peer = TestNodes.LegacyPublicKeyNode(port: 45022);
+        // 「对端」必须是真实 P-256 密钥对：握手响应现在要过 EnvelopeVerifier，
+        // 只有 NodeId 与公钥自洽、且用对应私钥签名的信封才会被采用。
+        var peerKeys = real.GenerateKeyPair();
+        var peer = TestNodes.RealKeyPairNode(peerKeys, port: 45022);
         var dht = new StubDhtService(local).Register(peer);
         var router = new RecordingMessageRouter();
 
         var link = new FakeTcpConnection(peer.EndPoint);
         router.Connection = link;
-        link.Enqueue(MessageRouter.SerializeEnvelope(new MessageEnvelope
+        var responseEnvelope = new MessageEnvelope
         {
             MessageType = MessageType.KeyExchange,
             SenderId = peer.NodeId.ToByteArray(),
+            SenderPublicKey = peerKeys.PublicKey,
             Payload = Wire.Serialize<Message>(new KeyExchangeMessage
             {
                 SenderId = peer.NodeId.ToByteArray(),
@@ -342,9 +364,11 @@ public class ChatServiceTests
                 EphemeralPublicKey = real.GenerateKeyPair().PublicKey,
                 IsResponse = true
             })
-        }));
+        };
+        link.Enqueue(MessageRouter.SerializeEnvelope(
+            MessageRouter.SignEnvelope(responseEnvelope, peerKeys, real)));
 
-        var service = new ChatService(dht, router, crypto, keyStore, NullLogger<ChatService>.Instance);
+        var service = new ChatService(dht, router, crypto, keyStore, NewReplayGuard(), NullLogger<ChatService>.Instance);
 
         var ex = await Should.ThrowAsync<InvalidOperationException>(
             () => service.SendPrivateMessageAsync(peer.NodeId, "不该发出去"));

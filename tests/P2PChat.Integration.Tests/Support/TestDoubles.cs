@@ -78,8 +78,22 @@ public sealed class FakeDhtService : IDhtService
     public Task<NodeInfo?> FindNodeAsync(NodeId targetId, CancellationToken ct = default)
         => Task.FromResult(_nodes.TryGetValue(targetId.ToHexString(), out var n) ? n : null);
 
-    /// <summary>登记静态对端 —— 与真实实现的语义一致：FindNodeAsync 必定能命中。</summary>
-    public void RegisterStaticPeer(NodeInfo node) => Register(node);
+    /// <summary>
+    /// 登记静态对端 —— 与真实实现（<c>MainlineDhtService.RegisterStaticPeer</c>）语义一致：
+    /// <c>FindNodeAsync</c> 必定能命中；且**同一 NodeId 端点不一致时保留先登记的端点，不覆盖**。
+    /// <para>
+    /// 契约来源：手工登记是用户带外的主动输入，而自报端点是对端在签名载荷里的自述
+    /// （签名只能证明「这话是它说的」，无法判定它有没有撒谎）。替身若无条件覆盖，
+    /// 集成测试跑的就是一个与产品不同的世界，断言也就失去意义。
+    /// </para>
+    /// </summary>
+    public void RegisterStaticPeer(NodeInfo node)
+    {
+        var key = node.NodeId.ToHexString();
+        if (_nodes.TryGetValue(key, out var existing) && !Equals(existing.EndPoint, node.EndPoint))
+            return;   // 冲突：保留已登记的端点（产品侧同时会记 LogWarning）
+        _nodes[key] = node;
+    }
 
     public Task StoreAsync(byte[] key, byte[] value, CancellationToken ct = default) => Task.CompletedTask;
 
