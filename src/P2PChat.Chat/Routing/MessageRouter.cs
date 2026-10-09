@@ -1,6 +1,4 @@
-using System.Buffers.Binary;
 using System.Collections.Concurrent;
-using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using P2PChat.Core.Abstractions;
 using P2PChat.Core.Enums;
@@ -20,6 +18,7 @@ public class MessageRouter : IMessageRouter
     private readonly IEncryptionService _encryption;
     private readonly IKeyStore _keyStore;
     private readonly IReplayGuard _replayGuard;
+    private readonly bool _floodingEnabled;
     private readonly ILogger<MessageRouter> _logger;
     private readonly ConcurrentDictionary<MessageType, IMessageHandler> _handlers = new();
     private readonly ConcurrentDictionary<string, ITcpConnection> _connectionPool = new();
@@ -37,19 +36,25 @@ public class MessageRouter : IMessageRouter
     /// 重放防护，<b>必填</b>。刻意不给默认值：写成 <c>IReplayGuard? replayGuard = null</c> 会让
     /// 「忘记注入」静默等于「关闭防护」—— 这是安全陷阱，必须让漏配变成编译错误。
     /// </param>
+    /// <param name="floodingEnabled">
+    /// mesh 泛洪开关（P2PChat:Mesh:FloodingEnabled，默认开）。关闭时入站消息只做本地处理、
+    /// 不向其它邻居转发 —— 作为行为对照与回退阀，不是安全边界。
+    /// </param>
     public MessageRouter(
         ITcpTransport tcpTransport,
         ISerializer serializer,
         IEncryptionService encryption,
         IKeyStore keyStore,
         IReplayGuard replayGuard,
-        ILogger<MessageRouter> logger)
+        ILogger<MessageRouter> logger,
+        bool floodingEnabled = true)
     {
         _tcpTransport = tcpTransport;
         _serializer = serializer;
         _encryption = encryption;
         _keyStore = keyStore;
         _replayGuard = replayGuard ?? throw new ArgumentNullException(nameof(replayGuard));
+        _floodingEnabled = floodingEnabled;
         _logger = logger;
     }
 
@@ -86,6 +91,12 @@ public class MessageRouter : IMessageRouter
                 Convert.ToHexString(envelope.SenderId).ToLower()[..8]);
             return;
         }
+
+        // 注意：入站连接**不**写进连接池。池的契约是「本机主动建立的出站连接」——
+        // 每条出站连接由发起方写、接收方读；发起方对这条连接没有持久读循环
+        // （握手响应由 ChatService 直接读，握手结束后无人读它）。若把入站连接混进池，
+        // 泛洪/转发就会「反向复用」一条发起方已停止读取的连接，消息静默丢失。
+        // 双向通信靠每对节点各建一条出站连接（mesh 维护循环保证），不走入站连接反向。
 
         // 重放防护（独立步骤，不并入 VerifyEnvelope）。
         // 验签只证明「来自持私钥的一方」，不证明「不是重放的旧包」——攻击者录下一条合法信封
@@ -152,6 +163,16 @@ public class MessageRouter : IMessageRouter
         {
             _logger.LogError(ex, "消息路由处理异常");
         }
+
+        // mesh 泛洪：只有走到这里的消息（验签 + 重放防护都已通过，即「本节点首次见到」）
+        // 才转发 —— 同一 MessageId 从其它路径再到达时会被上面的 TryAccept 拦截，
+        // 因此每个节点对每条消息最多转发一次，环路自动终止，无需 TTL。
+        // 转发保留原信封（原签名、原 Timestamp），接收方验的是原始发送者。
+        // 放在 handler 之后：本地处理优先于转发职责。
+        if (_floodingEnabled && IsFloodable(envelope.MessageType))
+        {
+            await ForwardAsync(envelope, sender, ct);
+        }
     }
 
     /// <inheritdoc />
@@ -163,6 +184,90 @@ public class MessageRouter : IMessageRouter
 
     /// <inheritdoc />
     public async Task SendViaConnectionAsync(ITcpConnection connection, Message message, CancellationToken ct = default)
+    {
+        var envelope = BuildSignedEnvelope(message);
+        var data = SerializeEnvelope(envelope);
+        await connection.SendAsync(data, ct);
+        _logger.LogTrace("发送消息: Type={Type}, Seq={Seq}",
+            envelope.MessageType, envelope.SequenceNumber);
+    }
+
+    /// <inheritdoc />
+    public async Task<int> FloodAsync(Message message, CancellationToken ct = default)
+    {
+        // 签名一次，同一信封复用到全部邻居：泛洪 N 个邻居时签名计算是 O(1) 而不是 O(N)。
+        var envelope = BuildSignedEnvelope(message);
+        var data = SerializeEnvelope(envelope);
+
+        var sent = 0;
+        foreach (var pair in _connectionPool)
+        {
+            if (!pair.Value.IsConnected)
+                continue;
+
+            try
+            {
+                await pair.Value.SendAsync(data, ct);
+                sent++;
+            }
+            catch (Exception ex)
+            {
+                // 单个邻居失败不中断其余邻居 —— 泛洪的契约是尽力送达而非全有全无。
+                _logger.LogWarning(ex, "泛洪发送失败: Peer={Peer}", DescribeKey(pair.Key));
+            }
+        }
+
+        _logger.LogTrace("泛洪消息: Type={Type}, 邻居={Total}, 送达={Sent}",
+            envelope.MessageType, _connectionPool.Count, sent);
+        return sent;
+    }
+
+    /// <summary>
+    /// 把一条<b>已验签的入站信封</b>原样转发给全部活跃出站邻居（mesh 泛洪的转发半边）。
+    /// <para>
+    /// 不重签名、不改 SequenceNumber / Timestamp —— 接收方验签与重放防护针对的都是原始发送者。
+    /// 序列化一次，同一字节串复用到全部邻居；单个邻居失败只记日志。
+    /// </para>
+    /// <para>
+    /// 排除两类连接：<b>原始发送者</b>（<c>envelope.SenderId</c> 对应的出站连接 —— 回发给源头
+    /// 必被其重放防护丢弃，纯属浪费）与<b>来源连接</b>（防御性：正常情况下来源是入站连接、不在池中）。
+    /// 中间转发者（多跳时把消息交给本节点的那个邻居）无法仅凭信封识别，回发给它的浪费由
+    /// 对端重放防护兜底 —— 全连接小规模网络下可接受。
+    /// </para>
+    /// </summary>
+    public async Task<int> ForwardAsync(MessageEnvelope envelope, ITcpConnection? exclude, CancellationToken ct = default)
+    {
+        var data = SerializeEnvelope(envelope);
+        var senderKey = envelope.SenderId.Length == NodeId.Size
+            ? Convert.ToHexString(envelope.SenderId)
+            : null;
+
+        var sent = 0;
+        foreach (var pair in _connectionPool)
+        {
+            if (!pair.Value.IsConnected)
+                continue;
+            if (exclude is not null && pair.Value.ConnectionId == exclude.ConnectionId)
+                continue;
+            if (senderKey is not null && string.Equals(pair.Key, senderKey, StringComparison.Ordinal))
+                continue;
+
+            try
+            {
+                await pair.Value.SendAsync(data, ct);
+                sent++;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "转发失败: Peer={Peer}", DescribeKey(pair.Key));
+            }
+        }
+
+        return sent;
+    }
+
+    /// <summary>构造并签名一条本机新发消息的信封（SendViaConnectionAsync 与 FloodAsync 共用）。</summary>
+    private MessageEnvelope BuildSignedEnvelope(Message message)
     {
         var identity = _keyStore.GetOrCreateIdentity();
 
@@ -177,13 +282,20 @@ public class MessageRouter : IMessageRouter
             Payload = _serializer.Serialize(message)
         };
 
-        var envelope = SignEnvelope(unsigned, identity, _encryption);
-
-        var data = SerializeEnvelope(envelope);
-        await connection.SendAsync(data, ct);
-        _logger.LogTrace("发送消息: Type={Type}, Seq={Seq}",
-            envelope.MessageType, envelope.SequenceNumber);
+        return SignEnvelope(unsigned, identity, _encryption);
     }
+
+    /// <summary>
+    /// 只有聊天载荷才泛洪：控制消息是请求-响应配对（KeyExchange 的 pendingResponses 按
+    /// MessageId 等待单一响应，泛洪会让第三方响应污染配对），文件消息是大流量点对点，
+    /// 群成员管理（Invite/Notify）与送达确认（DeliveryAck）都是定向语义。
+    /// </summary>
+    private static bool IsFloodable(MessageType messageType)
+        => messageType is MessageType.PrivateText or MessageType.GroupText;
+
+    /// <summary>日志用的池键短标签；池键恒为 40 位 hex，防御性兜底不抛异常。</summary>
+    private static string DescribeKey(string poolKey)
+        => poolKey.Length >= 8 ? poolKey[..8] : poolKey;
 
     /// <inheritdoc />
     public async Task<ITcpConnection> GetOrCreateConnectionAsync(NodeInfo node, CancellationToken ct = default)
@@ -225,6 +337,14 @@ public class MessageRouter : IMessageRouter
             }
             catch (InvalidOperationException) // 连接关闭
             {
+                break;
+            }
+            catch (OperationCanceledException)
+            {
+                // 取消是正常停机路径（进程退出时 appCts.Cancel()），不是错误。
+                // mesh 维护循环会让对端主动连入，退出时这类连接正阻塞在读取上，
+                // 取消会在这里以 OperationCanceledException 冒出来 —— 必须静默 break，
+                // 不能记成「处理传入消息异常」。
                 break;
             }
             catch (Exception ex)

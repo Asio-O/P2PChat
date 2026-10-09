@@ -222,31 +222,17 @@ public class GroupChatService : IGroupChatService
             IsGroup = true
         };
 
-        // 向所有成员扇出消息
-        var tasks = groupInfo.MemberIds
-            .Where(m => !m.SequenceEqual(senderId)) // 不发送给自己
-            .Select(async memberId =>
-            {
-                try
-                {
-                    var memberNode = await _dht.FindNodeAsync(new NodeId(memberId), ct);
-                    if (memberNode != null)
-                        await _router.SendAsync(memberNode, message, ct);
-                    else
-                        _logger?.LogWarning(
-                            "群消息扇出：成员无法定位，已跳过: {Member}, 群组={GroupId}",
-                            new NodeId(memberId).ToHexString()[..8], groupId);
-                }
-                catch (Exception ex)
-                {
-                    // 忽略离线成员 —— 但必须留痕：群消息扇出失败此前同样静默。
-                    _logger?.LogWarning(ex,
-                        "群消息扇出失败（成员可能离线），已跳过: {Member}, 群组={GroupId}",
-                        new NodeId(memberId).ToHexString()[..8], groupId);
-                }
-            });
-
-        await Task.WhenAll(tasks);
+        // mesh 泛洪发送：不再逐成员解析端点、逐个建连 —— 消息泛洪给全部 mesh 邻居，
+        // 成员过滤由接收端承担（群消息以群密钥加密，非成员解密失败即丢弃，
+        // GroupMessageHandler 已如此）。群密钥仍经 GroupInvite 定向分发，不走泛洪。
+        // 见 2026-10-09-mesh-topology-and-flooding。
+        var delivered = await _router.FloodAsync(message, ct);
+        if (delivered == 0)
+        {
+            _logger?.LogWarning(
+                "群消息泛洪无任何活跃邻居可达，消息未离开本机: 群组={GroupId}",
+                groupId[..Math.Min(8, groupId.Length)]);
+        }
     }
 
     /// <inheritdoc />

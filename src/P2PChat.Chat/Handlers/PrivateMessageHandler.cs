@@ -44,6 +44,22 @@ public class PrivateMessageHandler : IMessageHandler<TextMessage>
         CancellationToken ct = default)
     {
         var senderId = new NodeId(message.SenderId);
+
+        // 收件人校验（mesh 泛洪的配套关卡）：私聊消息现在会流经不相关的节点，
+        // 其中一些恰与发送者握过手、持有有效会话密钥 —— 没有这道关卡，
+        // A→B 的私聊会在「曾与 A 聊过天的」C 的界面上解密成功并显示。
+        // ConversationId 是方向无关键（ConversationId.ForPrivate 双侧同值），
+        // 「本机与发送者算出的键」不等于消息携带的键 ⇒ 本机不是收件人。
+        var myNodeId = _keyStore.GetOrCreateIdentity().NodeId;
+        var expectedConversation = ConversationId.ForPrivate(myNodeId, senderId);
+        if (!string.Equals(message.ConversationId, expectedConversation, StringComparison.Ordinal))
+        {
+            _logger.LogDebug("私聊消息收件人不符（mesh 泛洪路过），已忽略: Sender={Sender}, ConversationId={ConversationId}",
+                senderId.ToHexString()[..8],
+                message.ConversationId[..Math.Min(8, message.ConversationId.Length)]);
+            return;
+        }
+
         var sessionKey = _keyStore.GetSessionKey(senderId);
 
         if (sessionKey == null)

@@ -29,6 +29,18 @@ public interface IMessageRouter
     Task SendAsync(NodeInfo recipient, Message message, CancellationToken ct = default);
 
     /// <summary>
+    /// 向 mesh 邻居表中的全部活跃连接泛洪一条本机新发的消息：签名一次，多路复用同一信封。
+    /// <para>
+    /// 仅聊天载荷（PrivateText / GroupText）应走此路径；控制与文件消息是请求-响应配对或
+    /// 点对点大流量，泛洪在语义上是错的（见 2026-10-09-mesh-topology-and-flooding）。
+    /// </para>
+    /// <para>
+    /// 返回实际送达的邻居数（0 = 无活跃邻居）。单个邻居发送失败只记日志，不中断其余邻居。
+    /// </para>
+    /// </summary>
+    Task<int> FloodAsync(Message message, CancellationToken ct = default) => Task.FromResult(0);
+
+    /// <summary>
     /// 通过已有连接发送消息
     /// </summary>
     Task SendViaConnectionAsync(ITcpConnection connection, Message message, CancellationToken ct = default);

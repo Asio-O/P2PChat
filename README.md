@@ -133,6 +133,8 @@ pwsh -NoProfile -File scripts/e2e-verify.ps1
 | `P2PChat:BootstrapNodes` | 自定义引导节点（`host:port`） | 内置公共 DHT 引导节点 |
 | `P2PChat:KBucketSize` / `P2PChat:Alpha` | Kademlia 参数 | `20` / `3` |
 | `P2PChat:ReplayMaxAgeSeconds` | 入站重放防护的最大消息年龄（秒）。`<= 0` 关闭**整个**时间新鲜度检查（过旧与超前都不再拦，不是只放宽一侧）；MessageId 去重仍生效。仅建议在时钟严重偏移时使用 | `3600` |
+| `P2PChat:Mesh:FloodingEnabled` | mesh 泛洪开关。`false` 时数据平面退回「按需直连、无转发」的旧行为（行为对照 / 回退阀，不是安全边界） | `true` |
+| `P2PChat:Mesh:MaintainIntervalSeconds` | mesh 连接维护循环的轮间隔（秒）—— 每轮对「已知但无活跃连接」的对端补建连接 | `30` |
 
 额外环境变量：
 

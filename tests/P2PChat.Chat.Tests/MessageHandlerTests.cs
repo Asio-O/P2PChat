@@ -62,7 +62,7 @@ public class MessageHandlerTests
         await handler.HandleAsync(new TextMessage
         {
             SenderId = sender.ToByteArray(),
-            ConversationId = "conv-1",
+            ConversationId = ConversationId.ForPrivate(ks.GetOrCreateIdentity().NodeId, sender),
             Content = Convert.ToBase64String(Crypto.Encrypt(Encoding.UTF8.GetBytes(plain), GroupKey)),
             IsGroup = false
         }, new FakeTcpConnection(), AnyEnvelope(sender));
@@ -70,7 +70,7 @@ public class MessageHandlerTests
         var evt = await AsyncStream.FirstAsync(events.Events);
         evt.Content.ShouldBe(plain);
         evt.SenderId.ShouldBe(sender);
-        evt.ConversationId.ShouldBe("conv-1");
+        evt.ConversationId.ShouldBe(ConversationId.ForPrivate(ks.GetOrCreateIdentity().NodeId, sender));
         evt.IsGroup.ShouldBeFalse();
         evt.IsOutgoing.ShouldBeFalse();
     }
@@ -86,7 +86,7 @@ public class MessageHandlerTests
         await handler.HandleAsync(new TextMessage
         {
             SenderId = sender.ToByteArray(),
-            ConversationId = "conv-1",
+            ConversationId = ConversationId.ForPrivate(ks.GetOrCreateIdentity().NodeId, sender),
             Content = Convert.ToBase64String(Crypto.Encrypt("密文"u8.ToArray(), GroupKey)),
             IsGroup = false
         }, new FakeTcpConnection(), AnyEnvelope(sender));
@@ -106,7 +106,7 @@ public class MessageHandlerTests
         await handler.HandleAsync(new TextMessage
         {
             SenderId = sender.ToByteArray(),
-            ConversationId = "conv-1",
+            ConversationId = ConversationId.ForPrivate(ks.GetOrCreateIdentity().NodeId, sender),
             Content = Convert.ToBase64String(Crypto.Encrypt("密文"u8.ToArray(), GroupKey)),
             IsGroup = false
         }, new FakeTcpConnection(), AnyEnvelope(sender));
@@ -126,12 +126,37 @@ public class MessageHandlerTests
         await handler.HandleAsync(new TextMessage
         {
             SenderId = sender.ToByteArray(),
-            ConversationId = "conv-1",
+            ConversationId = ConversationId.ForPrivate(ks.GetOrCreateIdentity().NodeId, sender),
             Content = "这是一条没有加密的明文私聊",
             IsGroup = false
         }, new FakeTcpConnection(), AnyEnvelope(sender));
 
         events.Published.ShouldBeEmpty("Content 是明文的私聊解密必失败，必须丢弃且不得原样显示给用户");
+    }
+
+    [Fact]
+    public async Task 私聊消息_持有会话密钥的第三方_收到非收件私聊时丢弃不上报()
+    {
+        // mesh 泛洪下私聊会流经不相关的节点；其中一些恰与发送者握过手、持有有效会话密钥。
+        // 没有收件人校验，A→B 的私聊会在「曾与 A 聊过天的」C 界面上解密成功并显示 ——
+        // 本测试锁住「能解密 ≠ 收件人」这道关卡。
+        var ks = NewKeyStore();
+        var sender = NodeId.CreateRandom();
+        ks.SetSessionKey(sender, GroupKey);   // 本机与 sender 握过手，确实能解密
+        var events = new CapturingChatEventPublisher();
+        var handler = new PrivateMessageHandler(Crypto, ks, events, NullLogger<PrivateMessageHandler>.Instance);
+
+        var otherRecipient = NodeId.CreateRandom();
+        await handler.HandleAsync(new TextMessage
+        {
+            SenderId = sender.ToByteArray(),
+            // ConversationId 指向「sender ↔ otherRecipient」的会话，本机只是路过
+            ConversationId = ConversationId.ForPrivate(sender, otherRecipient),
+            Content = Convert.ToBase64String(Crypto.Encrypt("路过的密文"u8.ToArray(), GroupKey)),
+            IsGroup = false
+        }, new FakeTcpConnection(), AnyEnvelope(sender));
+
+        events.Published.ShouldBeEmpty("持有会话密钥的第三方不得显示非收件私聊 —— 能解密不代表是收件人");
     }
 
     #endregion

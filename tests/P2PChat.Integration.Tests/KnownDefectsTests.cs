@@ -90,8 +90,16 @@ public class KnownDefectsTests
         var events = new CapturingChatEventPublisher();
         var handler = new PrivateMessageHandler(
             encryption, keyStore, events, NullLogger<PrivateMessageHandler>.Instance);
+        // mesh 化后私聊 handler 校验收件人（ConversationId 必须是方向无关键）；
+        // 用与生产同源的 ConversationId.ForPrivate 构造合法值，避免测错分支。
+        var sender = new NodeId(senderId);
         await handler.HandleAsync(
-            new TextMessage { SenderId = senderId, ConversationId = "c", Content = content },
+            new TextMessage
+            {
+                SenderId = senderId,
+                ConversationId = ConversationId.ForPrivate(keyStore.GetOrCreateIdentity().NodeId, sender),
+                Content = content
+            },
             new FakeTcpConnection(),
             Envelope(MessageType.PrivateText));
 

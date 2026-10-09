@@ -964,6 +964,8 @@ Get-Process dotnet,testhost* -ErrorAction SilentlyContinue
 | `P2PChat:KBucketSize` | Kademlia k-bucket 容量 | `20` |
 | `P2PChat:Alpha` | Kademlia 迭代查询并行度 α | `3` |
 | `P2PChat:ReplayMaxAgeSeconds` | **入站重放防护的最大消息年龄**（秒，`double`）。`<= 0` 时**关闭整个时间新鲜度检查**（过旧与超前**都不再拦**，不是只放宽一侧）；MessageId 去重仍生效 | `3600`（1 小时） |
+| `P2PChat:Mesh:FloodingEnabled` | **mesh 泛洪开关**。`false` 时入站聊天消息只做本地处理、不向邻居转发（数据平面退回「按需直连」）—— 行为对照 / 回退阀，**不是安全边界** | `true` |
+| `P2PChat:Mesh:MaintainIntervalSeconds` | **mesh 连接维护轮间隔**（秒）—— `MeshTopologyService` 每轮对「已知但无活跃连接」的对端补建连接 | `30` |
 
 **额外环境变量**：
 

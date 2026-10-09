@@ -1,0 +1,32 @@
+# Sidecar consistency record — see README.i18n.tokens.md
+# Structure and header agreement only; not a translation-quality judgment.
+
+pair:
+  en: notes/implemented/architecture/2026-10-09-mesh-topology-and-flooding.md
+  zh: notes/implemented/architecture/2026-10-09-mesh-topology-and-flooding.zh.md
+
+members:
+  en:
+    heading: "# Agent Note: The data plane becomes a full mesh: chat messages flood, point-to-point is no longer the only path"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+      - Deferred
+      - Related
+    tokens: []
+  zh:
+    heading: "# Agent Note: 数据平面改为全连接 mesh —— 聊天消息泛洪，点对点不再是唯一路径"
+    status: "Status: implemented"
+    sections:
+      - Problem
+      - Decision
+      - Alternatives considered
+      - Consequences
+      - Deferred
+      - Related
+    tokens: []
+
+recorded: 2026-10-09

@@ -102,6 +102,7 @@ Each is observable. None carries a work estimate.
 ## Related
 
 - [Helper-assisted traversal and IPv6](../feature/2026-09-29-helper-assisted-traversal-and-ipv6.md) — the proposal this shares O2 with, and whose `## Risks` sets the deployment-coverage condition restated in `## Acceptance criteria`.
+- [Mesh topology and flooding](../../implemented/architecture/2026-10-09-mesh-topology-and-flooding.md) — changes the data plane to flood chat messages; it does not change that a handshake (and therefore O1's static-table lookup) still requires a direct connection, and it only partially relieves the deployment-coverage condition.
 - [Address-table IPv6 format](../../implemented/architecture/2026-09-29-peer-address-table-ipv6-format.md) — O3's landed half, and the record of why `p2pc_peers6` is never non-empty until O2 exists.
 - [Making `/connect` bidirectional](../../implemented/bug-fix/2026-09-28-connect-bidirectional.md) — where reverse registration and the static-table shadowing were introduced; O1 is the follow-on defect of that decision.
 - [NAT traversal](../../implemented/bug-fix/2026-09-21-nat-traversal.md) — the UPnP work that O1 and O2 sit on.

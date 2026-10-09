@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Text;
 using System.Threading.Channels;
@@ -123,7 +122,15 @@ public class ChatService : IChatService, IChatEventPublisher
             IsGroup = false
         };
 
-        await _router.SendAsync(recipient, message, ct);
+        // mesh 泛洪发送：私聊内容是端到端密文，中间节点只见密文；收件人判定由
+        // PrivateMessageHandler 的 ConversationId 校验承担（2026-10-09-mesh-topology-and-flooding）。
+        // 前面的 FindNodeAsync/握手流程保留：会话密钥协商仍需与收件人直连。
+        //
+        // 泛洪前显式确保与收件人的直连（幂等）：FloodAsync 只遍历已有连接池、不建连，
+        // 「已有会话密钥」路径会跳过握手、也就没有这次建连 —— 这里补上，私聊的
+        // 「发送即达」仍以直连为第一路径，泛洪只对「暂时不可达」的收件人提供多跳兜底。
+        await _router.GetOrCreateConnectionAsync(recipient, ct);
+        await _router.FloodAsync(message, ct);
 
         // 4. 生成本地消息事件 (显示在发送者UI)
         await _messageChannel.Writer.WriteAsync(new ChatMessageEvent

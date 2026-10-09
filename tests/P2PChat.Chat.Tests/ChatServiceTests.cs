@@ -145,18 +145,28 @@ public class ChatServiceTests
     }
 
     [Fact]
-    public async Task 发送私聊_必须按DHT解析出的节点连接_不得自行改写端点()
+    public async Task 发送私聊_握手必须按DHT解析出的节点建连_不得自行改写端点()
     {
         var h = Build();
-        h.KeyStore.SetSessionKey(h.Peer.NodeId, h.Crypto.GenerateRandomKey());
+        // 不预置会话密钥 → 走完整密钥交换；mesh 化后发送本身不再接触端点（泛洪），
+        // 但握手仍必须直连，直连目标必须就是 DHT 解析出的 NodeInfo。
+        var link = (FakeTcpConnection)h.Router.Connection;
+        link.OnReceiveWhenEmpty = () =>
+        {
+            var request = (KeyExchangeMessage)h.Router.SentViaConnection.Single().Message;
+            return KeyExchangeResponseFrames.Create(
+                h.PeerIdentity, h.Crypto.GenerateKeyPair().PublicKey, request.ConversationId);
+        };
 
         await h.Service.SendPrivateMessageAsync(h.Peer.NodeId, "端点透传");
 
         h.Dht.FindNodeCalls.Count.ShouldBe(1, "对端解析必须且只查一次 DHT");
         h.Dht.FindNodeCalls[0].ShouldBe(h.Peer.NodeId.ToHexString());
-        h.Router.Recipients.Single().ShouldBe(h.Peer,
-            "路由器拿到的必须就是 DHT 解析出的 NodeInfo（含显式/静态端点），Chat 层不得替换");
-        h.Router.Recipients.Single().EndPoint.ShouldBe(h.Peer.EndPoint);
+        // 两次 GetOrCreateConnectionAsync：一次是密钥交换握手，一次是泛洪前确保直连（幂等），
+        // 每次拿到的都必须就是 DHT 解析出的 NodeInfo（含显式/静态端点），Chat 层不得替换。
+        h.Router.ConnectCalls.Count.ShouldBe(2);
+        h.Router.ConnectCalls.ShouldAllBe(n => n.EndPoint.Equals(h.Peer.EndPoint),
+            "握手与发送前建连拿到的必须都是 DHT 解析出的 NodeInfo，Chat 层不得替换");
     }
 
     [Fact]

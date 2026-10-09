@@ -111,7 +111,7 @@ public class GroupChatIntegrationTests
     }
 
     [Fact]
-    public async Task 发送群消息_向所有其他成员扇出_且不发送给自己_密文上线而非明文()
+    public async Task 发送群消息_mesh泛洪单条上线_密文而非明文()
     {
         var (service, keyStore, dht, router) = BuildService();
         var m1 = MakeNode(46040);
@@ -124,8 +124,10 @@ public class GroupChatIntegrationTests
         const string plaintext = "群消息正文";
         await service.SendGroupMessageAsync(group.GroupId, plaintext);
 
+        // mesh 化后不再逐成员各发一条：泛洪只发一条消息，成员过滤由接收端按群密钥解密承担
+        // （非成员解密失败即丢弃）。「不发送给自己」由 FloodAsync 只遍历邻居连接池保证。
         var texts = router.Sent.OfType<TextMessage>().ToList();
-        texts.Count.ShouldBe(2, "应只向 2 个其他成员扇出，不包含创建者自己");
+        texts.Count.ShouldBe(1, "mesh 泛洪只发一条群消息");
         texts.ShouldAllBe(t => t.IsGroup && t.ConversationId == group.GroupId);
 
         // 关键断言：Content 必为 AES-256-GCM 密文的 Base64，不含明文片段

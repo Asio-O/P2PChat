@@ -13,6 +13,7 @@ using P2PChat.Networking.Transport;
 using P2PChat.Crypto.Encryption;
 using P2PChat.Crypto.Keys;
 using P2PChat.Chat.Routing;
+using P2PChat.Chat.Mesh;
 using P2PChat.Chat.Services;
 using P2PChat.Chat.Handlers;
 using P2PChat.UI.Views;
@@ -75,6 +76,14 @@ public class Program
         var replayMaxAgeSeconds = chatConfig.GetValue<double>("ReplayMaxAgeSeconds", 3600);
         var bootstrapNodes = chatConfig.GetSection("BootstrapNodes")
             .Get<string[]>() ?? [];
+
+        // mesh 拓扑配置（2026-10-09-mesh-topology-and-flooding）。
+        // FloodingEnabled=false 时数据平面退回「按需直连、无转发」的旧行为（回退阀，非安全边界）。
+        var meshOptions = new MeshOptions
+        {
+            FloodingEnabled = chatConfig.GetValue<bool>("Mesh:FloodingEnabled", true),
+            MaintainIntervalSeconds = chatConfig.GetValue<int>("Mesh:MaintainIntervalSeconds", 30),
+        };
 
         services.AddSingleton<ISerializer, MessagePackSerializer>();
         services.AddSingleton<IEncryptionService, AesGcmEncryptionService>();
@@ -230,7 +239,16 @@ public class Program
         services.AddSingleton<IReplayGuard>(sp => new MessageReplayGuard(
             sp.GetRequiredService<ILogger<MessageReplayGuard>>(),
             replayMaxAge));
-        services.AddSingleton<IMessageRouter, MessageRouter>();
+        // floodingEnabled 来自 P2PChat:Mesh:FloodingEnabled —— 回退阀必须真实到达路由器的构造参数，
+        // 不能只写在 MeshOptions 里供 MeshTopologyService 读（路由器才是真正执行转发/不转发的地方）。
+        services.AddSingleton<IMessageRouter>(sp => new MessageRouter(
+            sp.GetRequiredService<ITcpTransport>(),
+            sp.GetRequiredService<ISerializer>(),
+            sp.GetRequiredService<IEncryptionService>(),
+            sp.GetRequiredService<IKeyStore>(),
+            sp.GetRequiredService<IReplayGuard>(),
+            sp.GetRequiredService<ILogger<MessageRouter>>(),
+            meshOptions.FloodingEnabled));
         services.AddSingleton<IGroupMetadataStore, FileBackedGroupMetadataStore>();
         services.AddSingleton<PrivateMessageHandler>();
         services.AddSingleton<GroupMessageHandler>();
@@ -278,7 +296,8 @@ public class Program
 
             // 把带显式端点的联系人登记为「静态对端」：手工添加的联系人无需任何 DHT 发现即可直连。
             // 公共 Mainline DHT 上没有任何节点为我们宣告 NodeId→端点 映射，因此这是当前唯一可靠的直连手段。
-            RegisterStaticPeersFromContacts(provider, dhtService, logger);
+            // 返回值同时是 mesh 维护循环的启动种子。
+            var meshSeedPeers = RegisterStaticPeersFromContacts(provider, dhtService, logger);
 
             var dht = (MainlineDhtService)dhtService;
             var dhtCts = new CancellationTokenSource();
@@ -299,6 +318,13 @@ public class Program
             // 启动TCP入站连接处理
             var appCts = new CancellationTokenSource();
             _ = ProcessIncomingTcpAsync(tcpTransport, router, provider, appCts.Token);
+
+            // 启动 mesh 拓扑维护（全连接网状的连接维持循环，2026-10-09-mesh-topology-and-flooding）。
+            // 种子 = 静态对端；运行期候选由循环每轮从 DHT 路由表刷新。
+            var meshTopology = new MeshTopologyService(
+                dhtService, router, meshSeedPeers, meshOptions,
+                loggerFactory.CreateLogger<MeshTopologyService>());
+            _ = meshTopology.StartAsync(appCts.Token);
 
             // 启动TUI (阻塞主线程)
             var tui = provider.GetRequiredService<P2PChatTui>();
@@ -367,9 +393,18 @@ public class Program
     /// 这样重启后无需重新 <c>/add</c> 即可直连；端点无法解析的条目跳过并告警，不阻断启动。
     /// </para>
     /// </summary>
-    private static void RegisterStaticPeersFromContacts(
+    /// <summary>
+    /// 把带显式端点的联系人登记为「静态对端」，并返回登记成功的节点列表（mesh 种子）。
+    /// </summary>
+    /// <remarks>
+    /// 手工添加的联系人无需任何 DHT 发现即可直连 —— 公共 Mainline DHT 上没有任何节点
+    /// 为我们宣告 NodeId→端点 映射。返回的列表同时是 mesh 维护循环的启动种子，
+    /// 让静态已知对端进入网状常驻（2026-10-09-mesh-topology-and-flooding）。
+    /// </remarks>
+    private static List<NodeInfo> RegisterStaticPeersFromContacts(
         IServiceProvider provider, IDhtService dhtService, Microsoft.Extensions.Logging.ILogger logger)
     {
+        var registered = new List<NodeInfo>();
         try
         {
             var contacts = provider.GetRequiredService<IContactService>()
@@ -387,7 +422,7 @@ public class Program
                     continue;
                 }
 
-                dhtService.RegisterStaticPeer(new NodeInfo
+                var node = new NodeInfo
                 {
                     NodeId = contact.NodeId,
                     EndPoint = endPoint,
@@ -395,13 +430,17 @@ public class Program
                     // 真实公钥由 GroupChatService 在需要包装群密钥时主动握手取回。
                     PublicKey = null,
                     State = Core.Enums.PeerState.Online
-                });
+                };
+                dhtService.RegisterStaticPeer(node);
+                registered.Add(node);
             }
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "加载静态对端失败");
         }
+
+        return registered;
     }
 
     /// <summary>

@@ -502,14 +502,15 @@ public sealed class RecordingMessageRouter : IMessageRouter
     private readonly object _gate = new();
     private readonly List<MessageEnvelope> _routed = [];
     private readonly List<(ITcpConnection Connection, Message Message)> _viaConnection = [];
+    private readonly List<NodeInfo> _connectCalls = [];
 
-    /// <summary>出站消息（按发送顺序）。</summary>
+    /// <summary>出站消息（按发送顺序），含 mesh 泛洪（<see cref="FloodAsync"/>）发出的消息。</summary>
     public IReadOnlyList<Message> Sent
     {
         get { lock (_gate) return _sent.ToList(); }
     }
 
-    /// <summary>与 <see cref="Sent"/> 一一对应的收件人 NodeInfo。</summary>
+    /// <summary>与 <see cref="Sent"/> 一一对应的收件人 NodeInfo（仅点对点 <see cref="SendAsync"/> 填充；泛洪无单一收件人）。</summary>
     public IReadOnlyList<NodeInfo> Recipients
     {
         get { lock (_gate) return _recipients.ToList(); }
@@ -525,6 +526,12 @@ public sealed class RecordingMessageRouter : IMessageRouter
     public IReadOnlyList<(ITcpConnection Connection, Message Message)> SentViaConnection
     {
         get { lock (_gate) return _viaConnection.ToList(); }
+    }
+
+    /// <summary><see cref="GetOrCreateConnectionAsync"/> 被请求建连的节点（按调用顺序）。</summary>
+    public IReadOnlyList<NodeInfo> ConnectCalls
+    {
+        get { lock (_gate) return _connectCalls.ToList(); }
     }
 
     public List<MessageType> RegisteredHandlers { get; } = [];
@@ -560,8 +567,17 @@ public sealed class RecordingMessageRouter : IMessageRouter
         return Task.CompletedTask;
     }
 
+    public Task<int> FloodAsync(Message message, CancellationToken ct = default)
+    {
+        lock (_gate) _sent.Add(message);
+        return Task.FromResult(1);
+    }
+
     public Task<ITcpConnection> GetOrCreateConnectionAsync(NodeInfo node, CancellationToken ct = default)
-        => Task.FromResult(Connection);
+    {
+        lock (_gate) _connectCalls.Add(node);
+        return Task.FromResult(Connection);
+    }
 
     public Task CloseConnectionAsync(byte[] nodeId) => Task.CompletedTask;
 }

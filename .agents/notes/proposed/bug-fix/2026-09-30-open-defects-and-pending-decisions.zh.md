@@ -102,6 +102,7 @@ UPnP 按规范本身就是 IPv4-only，IPv6 上的 IGD 是**另一套**机制，
 ## Related
 
 - [Helper-assisted traversal and IPv6](../feature/2026-09-29-helper-assisted-traversal-and-ipv6.md) —— 与本篇共享 O2 的提案，其 `## Risks` 给出了本篇 `## Acceptance criteria` 里复述的那条部署覆盖条件。
+- [Mesh topology and flooding](../../implemented/architecture/2026-10-09-mesh-topology-and-flooding.md) —— 数据平面改为聊天消息泛洪；它不改变「握手（因此 O1 的静态表查询）仍需直连」这一事实，且只部分消解那条部署覆盖条件。
 - [地址表 IPv6 格式](../../implemented/architecture/2026-09-29-peer-address-table-ipv6-format.md) —— O3 已落地的那一半，以及「O2 落地前 `p2pc_peers6` 为何永远非空」的记录。
 - [`/connect` 双向化](../../implemented/bug-fix/2026-09-28-connect-bidirectional.md) —— 反向登记与静态表遮蔽被引入的地方；O1 是那个决定的后续缺陷。
 - [NAT 穿透](../../implemented/bug-fix/2026-09-21-nat-traversal.md) —— O1 与 O2 所在的 UPnP 工作。

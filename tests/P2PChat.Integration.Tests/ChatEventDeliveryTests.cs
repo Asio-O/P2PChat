@@ -195,10 +195,14 @@ public class ChatEventDeliveryTests
                 P2PChat.Chat.Handlers.PrivateMessageHandler>.Instance);
 
         const string plain = "解密成功但用户看不到";
+        // mesh 化后私聊 handler 校验收件人（ConversationId 必须是方向无关键），
+        // 用与生产同源的 ConversationId.ForPrivate 构造合法值 —— 本测试要复现的是
+        // 「发布器接错」的缺陷现场，不是「收件人不符」的丢弃。
         await handler.HandleAsync(new P2PChat.Core.Models.TextMessage
         {
             SenderId = sender.ToByteArray(),
-            ConversationId = "conv",
+            ConversationId = P2PChat.Core.Models.ConversationId.ForPrivate(
+                keyStore.GetOrCreateIdentity().NodeId, sender),
             Content = Convert.ToBase64String(
                 crypto.Encrypt(System.Text.Encoding.UTF8.GetBytes(plain), sessionKey)),
             IsGroup = false

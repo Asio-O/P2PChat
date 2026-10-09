@@ -171,6 +171,12 @@ public sealed class RecordingMessageRouter : IMessageRouter
         return Task.CompletedTask;
     }
 
+    public Task<int> FloodAsync(Message message, CancellationToken ct = default)
+    {
+        lock (_sent) _sent.Add(message);
+        return Task.FromResult(1);
+    }
+
     public Task<ITcpConnection> GetOrCreateConnectionAsync(NodeInfo node, CancellationToken ct = default)
         => Task.FromResult<ITcpConnection>(new FakeTcpConnection());
 

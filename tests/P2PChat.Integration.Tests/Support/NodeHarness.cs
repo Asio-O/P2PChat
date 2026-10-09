@@ -311,6 +311,12 @@ public sealed class PayloadCapturingMessageRouter : IMessageRouter
         await _inner.SendViaConnectionAsync(connection, message, ct);
     }
 
+    public async Task<int> FloodAsync(Message message, CancellationToken ct = default)
+    {
+        Capture(message);
+        return await _inner.FloodAsync(message, ct);
+    }
+
     public Task<ITcpConnection> GetOrCreateConnectionAsync(NodeInfo node, CancellationToken ct = default)
         => _inner.GetOrCreateConnectionAsync(node, ct);
 
